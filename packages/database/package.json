@@ -1,0 +1,35 @@
+{
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "name": "@crm/database",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@crm/config": "workspace:*",
+    "@prisma/client": "7.10.0",
+    "@prisma/adapter-pg": "7.10.0"
+  },
+  "devDependencies": {
+    "@crm/eslint-config": "workspace:*",
+    "@crm/typescript-config": "workspace:*",
+    "typescript": "6.0.3",
+    "@types/node": "24.19.1",
+    "prisma": "7.10.0"
+  },
+  "scripts": {
+    "build": "pnpm db:generate && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "dev": "tsc --watch -p tsconfig.build.json",
+    "db:generate": "prisma generate",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:seed": "prisma db seed"
+  },
+  "type": "module"
+}

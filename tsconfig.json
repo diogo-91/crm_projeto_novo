@@ -1,0 +1,8 @@
+{
+  "extends": "@crm/typescript-config/node.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["*.mts", "tests/**/*.ts"]
+}

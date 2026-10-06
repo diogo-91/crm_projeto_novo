@@ -1,0 +1,17 @@
+packages:
+  - apps/*
+  - packages/*
+engineStrict: true
+strictPeerDependencies: true
+autoInstallPeers: false
+allowBuilds:
+  argon2: true
+  '@prisma/engines': true
+  '@swc/core': true
+  prisma: true
+  unrs-resolver: true
+  msgpackr-extract: true
+  '@scarf/scarf': false
+minimumReleaseAge: 1440
+minimumReleaseAgeStrict: true
+networkConcurrency: 8

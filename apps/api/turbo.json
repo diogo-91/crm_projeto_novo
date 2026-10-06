@@ -1,0 +1,25 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "dev": {
+      "passThroughEnv": [
+        "NODE_ENV",
+        "API_PORT",
+        "DATABASE_URL",
+        "REDIS_HOST",
+        "REDIS_PORT",
+        "REDIS_PASSWORD",
+        "CORS_ORIGINS",
+        "LOG_LEVEL",
+        "JWT_SECRET",
+        "JWT_ISSUER",
+        "JWT_AUDIENCE",
+        "ACCESS_TOKEN_TTL_SECONDS",
+        "SESSION_TTL_SECONDS",
+        "AUTH_LOGIN_IP_LIMIT",
+        "AUTH_LOGIN_IDENTITY_LIMIT",
+        "AUTH_REFRESH_IP_LIMIT"
+      ]
+    }
+  }
+}

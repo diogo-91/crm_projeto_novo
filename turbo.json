@@ -1,0 +1,43 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": [".env", "tsconfig.json", "vitest.config.mts"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**", "src/generated/**", "next-env.d.ts"],
+      "env": ["NODE_ENV", "NEXT_PUBLIC_API_URL"],
+      "passThroughEnv": ["DATABASE_URL"]
+    },
+    "dev": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "persistent": true,
+      "passThroughEnv": [
+        "NODE_ENV",
+        "API_PORT",
+        "DATABASE_URL",
+        "REDIS_HOST",
+        "REDIS_PORT",
+        "REDIS_PASSWORD",
+        "CORS_ORIGINS",
+        "LOG_LEVEL",
+        "NEXT_PUBLIC_API_URL"
+      ]
+    },
+    "lint": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "outputs": [],
+      "cache": false
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "outputs": []
+    }
+  },
+  "globalEnv": ["NODE_ENV", "NEXT_PUBLIC_API_URL"]
+}

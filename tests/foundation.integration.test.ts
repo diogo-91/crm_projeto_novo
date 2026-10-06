@@ -1,0 +1,1622 @@
+import { SignJWT, decodeJwt } from 'jose';
+import { Redis } from 'ioredis';
+import { createHash } from 'node:crypto';
+import { spawn, execFile } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createServer } from 'node:net';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { createDatabaseClient } from '@crm/database';
+import type { DatabaseClient } from '@crm/database';
+import {
+  authResponseSchema,
+  meResponseSchema,
+  organizationResponseSchema,
+  branchResponseSchema,
+  membershipResponseSchema,
+  branchListResponseSchema,
+  memberListResponseSchema,
+} from '@crm/contracts';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+const execute = promisify(execFile);
+const project = `crm-test-${randomUUID()}`;
+const children: { process: ChildProcess; logs: string[]; exit: Promise<void> }[] = [];
+let directory: string;
+let composeArgs: string[];
+let environment: NodeJS.ProcessEnv;
+let url: string;
+let database: DatabaseClient | undefined;
+async function compose(...args: string[]): Promise<string> {
+  const result = await execute('docker', [...composeArgs, ...args], {
+    timeout: 90000,
+    maxBuffer: 1024 * 1024,
+  });
+  return result.stdout.trim();
+}
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Unable to allocate API port');
+  const port = address.port;
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  return port;
+}
+function start(path: string) {
+  const process = spawn(globalThis.process.execPath, [path], {
+    env: environment,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const logs: string[] = [];
+  process.stdout?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
+  process.stderr?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
+  const exit = new Promise<void>((resolve, reject) => {
+    process.once('error', reject);
+    process.once('close', (code, signal) => {
+      if (code === 0 && signal === null) resolve();
+      else reject(new Error('Child process did not exit cleanly'));
+    });
+  });
+  const child = { process, logs, exit };
+  children.push(child);
+  return child;
+}
+async function until(condition: () => Promise<boolean>, description: string): Promise<void> {
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    if (await condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Timed out waiting for ${description}`);
+}
+beforeAll(async () => {
+  directory = await mkdtemp(join(tmpdir(), 'crm-foundation-'));
+  const databasePassword = randomBytes(24).toString('hex');
+  const redisPassword = randomBytes(24).toString('hex');
+  const envFile = join(directory, '.env');
+  await writeFile(
+    envFile,
+    `POSTGRES_DB=crm_test\nPOSTGRES_USER=crm_test\nPOSTGRES_PASSWORD=${databasePassword}\nPOSTGRES_PORT=0\nREDIS_PORT=0\nREDIS_PASSWORD=${redisPassword}\n`,
+    { mode: 0o600 },
+  );
+  composeArgs = [
+    'compose',
+    '--file',
+    'docker-compose.yml',
+    '--env-file',
+    envFile,
+    '--project-name',
+    project,
+  ];
+  await compose('up', '-d', '--wait', 'postgres', 'redis');
+  const databasePort = (await compose('port', 'postgres', '5432')).split(':').at(-1);
+  const redisPort = (await compose('port', 'redis', '6379')).split(':').at(-1);
+  const apiPort = await freePort();
+  environment = {
+    ...process.env,
+    NODE_ENV: 'test',
+    JWT_SECRET: randomBytes(32).toString('base64url'),
+    SEED_ADMIN_PASSWORD: randomBytes(24).toString('base64url'),
+    SEED_PLATFORM_PROVISIONING: 'true',
+    AUTH_LOGIN_IP_LIMIT: '1000',
+    AUTH_LOGIN_IDENTITY_LIMIT: '500',
+    AUTH_REFRESH_IP_LIMIT: '1000',
+    API_PORT: String(apiPort),
+    LOG_LEVEL: 'info',
+    DATABASE_URL: `postgresql://crm_test:${databasePassword}@127.0.0.1:${databasePort}/crm_test`,
+    REDIS_HOST: '127.0.0.1',
+    REDIS_PORT: redisPort,
+    REDIS_PASSWORD: redisPassword,
+    CORS_ORIGINS: 'http://localhost:3000',
+  };
+  url = `http://127.0.0.1:${apiPort}`;
+  await execute('pnpm', ['--filter', '@crm/database', 'db:migrate:deploy'], {
+    env: environment,
+    timeout: 30000,
+  });
+  const databaseUrl = environment['DATABASE_URL'];
+  if (!databaseUrl) throw new Error('Integration database URL is required');
+  database = createDatabaseClient(databaseUrl);
+  await database.$connect();
+  await execute(process.execPath, ['apps/api/dist/bootstrap/seed.js'], { env: environment });
+  start('apps/api/dist/bootstrap/main.js');
+  const worker = start('apps/worker/dist/bootstrap/main.js');
+  await until(async () => {
+    try {
+      return (
+        (await fetch(`${url}/health/ready`, { signal: AbortSignal.timeout(2000) })).status === 200
+      );
+    } catch (error: unknown) {
+      if (error instanceof TypeError || (error instanceof Error && error.name === 'TimeoutError'))
+        return false;
+      throw error;
+    }
+  }, 'API readiness');
+  await until(
+    () => Promise.resolve(worker.logs.join('').includes('worker ready')),
+    'worker readiness',
+  );
+});
+afterAll(async () => {
+  const shutdowns = await Promise.allSettled([
+    ...(database ? [database.$disconnect()] : []),
+    ...children.map(async (child) => {
+      if (child.process.exitCode === null && child.process.signalCode === null)
+        child.process.kill('SIGTERM');
+      await Promise.race([
+        child.exit,
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(() => reject(new Error('Graceful shutdown timeout')), 10000).unref(),
+        ),
+      ]);
+      expect(child.logs.join('')).toContain('shutdown complete');
+    }),
+  ]);
+  try {
+    if (composeArgs) await compose('down', '--volumes', '--remove-orphans');
+  } finally {
+    if (directory) await rm(directory, { recursive: true });
+  }
+  const errors: unknown[] = [];
+  for (const result of shutdowns) {
+    if (result.status === 'rejected') errors.push(result.reason);
+  }
+  if (errors.length > 0) throw new AggregateError(errors, 'Process shutdown failed');
+});
+it('applies migration twice and executes a real idempotent technical seed', async () => {
+  await execute('pnpm', ['--filter', '@crm/database', 'db:migrate:deploy'], {
+    env: environment,
+    timeout: 30000,
+  });
+  await execute(process.execPath, ['apps/api/dist/bootstrap/seed.js'], { env: environment });
+  await execute(process.execPath, ['apps/api/dist/bootstrap/seed.js'], { env: environment });
+  const result = await compose(
+    'exec',
+    '-T',
+    'postgres',
+    'psql',
+    '-U',
+    'crm_test',
+    '-d',
+    'crm_test',
+    '-tAc',
+    "SELECT count(*) FROM infrastructure_metadata WHERE key='foundation' AND version=1",
+  );
+  expect(result).toBe('1');
+});
+it.each(['/health', '/health/live', '/health/ready'])(
+  'serves %s against real PostgreSQL and Redis',
+  async (path) => {
+    const response = await fetch(url + path);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toHaveProperty('status', 'ok');
+  },
+);
+it('serves Swagger UI and valid documented technical paths', async () => {
+  const ui = await fetch(url + '/docs');
+  expect(ui.status).toBe(200);
+  expect(await ui.text()).toContain('Swagger UI');
+  const document = await fetch(url + '/docs/openapi.json');
+  const body: unknown = await document.json();
+  expect(body).toHaveProperty('paths./health/ready');
+});
+it('API queue producer receives the result from the separate worker process', async () => {
+  const result = await execute(process.execPath, ['apps/api/dist/bootstrap/queue-probe.js'], {
+    env: environment,
+    timeout: 20000,
+  });
+  expect(result.stdout).toContain('queue probe completed');
+  expect(children[1]?.logs.join('')).toContain('technical job completed');
+});
+it.each(['redis', 'postgres'])(
+  'reports unavailable %s and then recovers without restarting API',
+  async (service) => {
+    const bearer = await adminToken();
+    await compose('pause', service);
+    try {
+      const response = await fetch(url + '/health/ready');
+      expect(response.status).toBe(503);
+      const body: unknown = await response.json();
+      expect(body).toHaveProperty(
+        `services.${service === 'postgres' ? 'database' : 'redis'}`,
+        'down',
+      );
+      expect((await fetch(url + '/health/live')).status).toBe(200);
+      expect((await fetch(url + '/health')).status).toBe(503);
+      if (service === 'postgres') {
+        const unavailable = await fetch(`${url}/api/v1/organizations/${randomUUID()}`, {
+          headers: { Authorization: `Bearer ${bearer}` },
+        });
+        expect(unavailable.status).toBe(500);
+        const problem: unknown = await unavailable.json();
+        expect(problem).toMatchObject({ code: 'INTERNAL_ERROR', status: 500 });
+        expect(JSON.stringify(problem)).not.toMatch(/Prisma|postgresql|SELECT|crm_test/);
+      }
+    } finally {
+      await compose('unpause', service);
+    }
+    await until(
+      async () => (await fetch(url + '/health/ready')).status === 200,
+      `${service} recovery`,
+    );
+  },
+);
+
+function db(): DatabaseClient {
+  if (!database) throw new Error('Integration database has not been initialized');
+  return database;
+}
+const tokens = new Map<string, Promise<string>>();
+async function authRequest(
+  path: string,
+  payload: unknown = {},
+  options: { token?: string; cookie?: string; origin?: string; method?: string } = {},
+) {
+  return fetch(url + '/api/v1/auth' + path, {
+    method: options.method ?? 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: options.origin ?? 'http://localhost:3000',
+      ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
+      ...(options.cookie ? { Cookie: options.cookie } : {}),
+    },
+    ...(options.method === 'GET' ? {} : { body: JSON.stringify(payload) }),
+  });
+}
+async function login(
+  email = 'admin.demo@example.test',
+  password = environment['SEED_ADMIN_PASSWORD'],
+) {
+  if (!password) throw new Error('Synthetic seed password absent');
+  const response = await authRequest('/login', { email, password });
+  expect(response.status).toBe(200);
+  const body = authResponseSchema.parse(await response.json());
+  const cookie = response.headers.get('set-cookie')?.split(';')[0];
+  if (!cookie) throw new Error('Refresh cookie missing');
+  return { body, cookie, response };
+}
+async function adminToken(organizationId?: string) {
+  const key = organizationId ?? 'platform';
+  let pending = tokens.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const signed = await login();
+      if (!organizationId || signed.body.context?.organizationId === organizationId)
+        return signed.body.accessToken;
+      const selected = await authRequest(
+        '/context',
+        { organizationId },
+        { token: signed.body.accessToken },
+      );
+      if (selected.status === 403) {
+        const demo = await authRequest(
+          '/context',
+          { organizationId: '9b150a17-f00e-4f2c-8730-513ff1fc9801' },
+          { token: signed.body.accessToken },
+        );
+        expect(demo.status).toBe(200);
+        return authResponseSchema.parse(await demo.json()).accessToken;
+      }
+      expect(selected.status).toBe(200);
+      return authResponseSchema.parse(await selected.json()).accessToken;
+    })();
+    tokens.set(key, pending);
+  }
+  return pending;
+}
+async function request(path: string, payload?: unknown) {
+  const organizationId = /^\/organizations\/([0-9a-f-]{36})(?:[/?]|$)/.exec(path)?.[1];
+  const token = await adminToken(organizationId);
+  return fetch(url + '/api/v1' + path, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
+    },
+    ...(payload === undefined ? {} : { method: 'POST', body: JSON.stringify(payload) }),
+  });
+}
+async function organization(name = 'Integration organization') {
+  const response = await request('/organizations', { name });
+  expect(response.status).toBe(201);
+  return organizationResponseSchema.parse(await response.json());
+}
+async function branch(organizationId: string, code = 'CENTRO') {
+  const response = await request(`/organizations/${organizationId}/branches`, {
+    name: 'Branch',
+    code,
+  });
+  expect(response.status).toBe(201);
+  return branchResponseSchema.parse(await response.json());
+}
+async function identity(organizationId: string, branchIds: string[] = []) {
+  const email = `${randomUUID()}@example.test`;
+  const response = await request(`/organizations/${organizationId}/users`, {
+    name: 'User',
+    email,
+    branchIds,
+    ...(branchIds[0] ? { primaryBranchId: branchIds[0] } : {}),
+  });
+  expect(response.status).toBe(201);
+  return membershipResponseSchema.parse(await response.json());
+}
+it('seed twice preserves demo IDs, one organization, five branches, one identity and membership', async () => {
+  const first = await db().organization.findUniqueOrThrow({
+    where: { id: '9b150a17-f00e-4f2c-8730-513ff1fc9801' },
+    include: { branches: true, memberships: { include: { user: true, branches: true } } },
+  });
+  await execute(process.execPath, ['apps/api/dist/bootstrap/seed.js'], { env: environment });
+  const second = await db().organization.findUniqueOrThrow({
+    where: { id: first.id },
+    include: { branches: true, memberships: { include: { user: true, branches: true } } },
+  });
+  expect(second).toEqual(first);
+  expect(second.branches).toHaveLength(5);
+  expect(second.memberships).toHaveLength(1);
+  expect(second.memberships[0]?.branches).toHaveLength(5);
+  expect(second.memberships[0]?.user.email).toBe('admin.demo@example.test');
+  expect(await db().user.count()).toBe(1);
+});
+it('HTTP creates and retrieves organization with normalized optional international document', async () => {
+  const response = await request('/organizations', {
+    name: ' Org A ',
+    legalName: ' Legal ',
+    document: 'GB-123.456/789',
+  });
+  expect(response.status).toBe(201);
+  const created = organizationResponseSchema.parse(await response.json());
+  expect(created).toMatchObject({
+    name: 'Org A',
+    legalName: 'Legal',
+    document: 'GB123456789',
+    active: true,
+  });
+  const read = await request(`/organizations/${created.id}`);
+  expect(read.status).toBe(200);
+  expect(organizationResponseSchema.parse(await read.json())).toEqual(created);
+  expect(
+    (await request('/organizations', { name: 'Other jurisdiction', document: 'GB123456789' }))
+      .status,
+  ).toBe(201);
+});
+it('HTTP rejects invalid UUIDs, email, pagination and mass assignment with safe 400 responses', async () => {
+  const org = await organization();
+  const responses = [
+    await request('/organizations/not-a-uuid'),
+    await request('/organizations', { name: 'Org', active: false }),
+    await request(`/organizations/${org.id}/users`, { name: 'User', email: 'invalid' }),
+    await request(`/organizations/${org.id}/users`, {
+      name: 'User',
+      email: 'user@example.test',
+      passwordHash: 'sensitive-input',
+    }),
+    await request(`/organizations/${org.id}/branches?limit=101`),
+    await request(`/organizations/${org.id}/branches?organizationId=${randomUUID()}`),
+  ];
+  for (const response of responses) {
+    expect(response.status).toBe(400);
+    expect(response.headers.get('content-type')).toContain('application/problem+json');
+    const body: unknown = await response.json();
+    expect(body).toMatchObject({ code: 'INVALID_INPUT', status: 400 });
+    expect(body).toHaveProperty('requestId');
+    expect(JSON.stringify(body)).not.toContain('sensitive-input');
+  }
+});
+it('HTTP returns 404 for missing organization and missing user without Prisma details', async () => {
+  const org = await organization();
+  for (const response of [
+    await request(`/organizations/${randomUUID()}`),
+    await request(`/organizations/${randomUUID()}/branches`, { name: 'Branch', code: 'A' }),
+    await request(`/organizations/${org.id}/memberships`, { userId: randomUUID() }),
+  ]) {
+    expect(response.status).toBe(404);
+    expect(JSON.stringify(await response.json())).not.toMatch(
+      /Prisma|postgresql|constraint|SELECT/,
+    );
+  }
+});
+it('HTTP branch code is normalized, unique per tenant and safe under concurrent creation', async () => {
+  const a = await organization('A');
+  const b = await organization('B');
+  const results = await Promise.all([
+    request(`/organizations/${a.id}/branches`, { name: 'A1', code: ' centro ' }),
+    request(`/organizations/${a.id}/branches`, { name: 'A2', code: 'CENTRO' }),
+  ]);
+  expect(results.map((result) => result.status).sort()).toEqual([201, 409]);
+  expect(await db().branch.count({ where: { organizationId: a.id, code: 'CENTRO' } })).toBe(1);
+  expect((await branch(b.id)).code).toBe('CENTRO');
+});
+it('HTTP creates a normalized global identity, membership and primary branch atomically', async () => {
+  const org = await organization();
+  const store = await branch(org.id);
+  const email = `${randomUUID()}@example.test`;
+  const response = await request(`/organizations/${org.id}/users`, {
+    name: ' Ana ',
+    email: ` ${email.toUpperCase()} `,
+    branchIds: [store.id],
+    primaryBranchId: store.id,
+  });
+  expect(response.status).toBe(201);
+  const member = membershipResponseSchema.parse(await response.json());
+  expect(member).toMatchObject({
+    organizationId: org.id,
+    primaryBranchId: store.id,
+    branchIds: [store.id],
+    user: { name: 'Ana', email, active: true },
+  });
+  expect(member.user).not.toHaveProperty('passwordHash');
+  expect(member.user).not.toHaveProperty('organizationId');
+  expect(
+    await db().membershipBranch.count({
+      where: { membershipId: member.id, organizationId: org.id, branchId: store.id },
+    }),
+  ).toBe(1);
+});
+it('HTTP duplicate email is globally unique under concurrent creation and rolls back membership', async () => {
+  const a = await organization('Email A');
+  const b = await organization('Email B');
+  const email = `${randomUUID()}@example.test`;
+  const results = await Promise.all([
+    request(`/organizations/${a.id}/users`, { name: 'User A', email }),
+    request(`/organizations/${b.id}/users`, { name: 'User B', email: email.toUpperCase() }),
+  ]);
+  expect(results.map((result) => result.status).sort()).toEqual([201, 409]);
+  const user = await db().user.findUniqueOrThrow({
+    where: { email },
+    include: { memberships: true },
+  });
+  expect(user.memberships).toHaveLength(1);
+  const conflict = results.find((result) => result.status === 409);
+  if (!conflict) throw new Error('Missing conflict response');
+  expect(await conflict.json()).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+});
+it('HTTP explicitly links one global identity to another organization without duplicating user', async () => {
+  const a = await organization('Global A');
+  const b = await organization('Global B');
+  const storeA = await branch(a.id);
+  const storeB = await branch(b.id);
+  const memberA = await identity(a.id, [storeA.id]);
+  const response = await request(`/organizations/${b.id}/memberships`, {
+    userId: memberA.user.id,
+    branchIds: [storeB.id],
+    primaryBranchId: storeB.id,
+  });
+  expect(response.status).toBe(201);
+  const memberB = membershipResponseSchema.parse(await response.json());
+  expect(memberB.user.id).toBe(memberA.user.id);
+  expect(memberB.organizationId).toBe(b.id);
+  expect(memberB.primaryBranchId).toBe(storeB.id);
+  expect(await db().user.count({ where: { email: memberA.user.email } })).toBe(1);
+  expect(
+    (await request(`/organizations/${b.id}/memberships`, { userId: memberA.user.id })).status,
+  ).toBe(409);
+});
+it('HTTP rejects cross-tenant branch membership and leaves no new global identity behind', async () => {
+  const a = await organization('Tenant A');
+  const b = await organization('Tenant B');
+  const branchB = await branch(b.id);
+  const email = `${randomUUID()}@example.test`;
+  const response = await request(`/organizations/${a.id}/users`, {
+    name: 'Invalid association',
+    email,
+    branchIds: [branchB.id],
+    primaryBranchId: branchB.id,
+  });
+  expect(response.status).toBe(404);
+  expect(await db().user.findUnique({ where: { email } })).toBeNull();
+  expect(await db().organizationMembership.count({ where: { organizationId: a.id } })).toBe(1);
+});
+it('HTTP rejects duplicate assignments and a primary branch not explicitly assigned', async () => {
+  const org = await organization();
+  const store = await branch(org.id);
+  const user = await identity(org.id);
+  const target = await organization();
+  expect(
+    (
+      await request(`/organizations/${target.id}/memberships`, {
+        userId: user.user.id,
+        primaryBranchId: store.id,
+      })
+    ).status,
+  ).toBe(400);
+  expect(
+    (
+      await request(`/organizations/${org.id}/users`, {
+        name: 'User',
+        email: `${randomUUID()}@example.test`,
+        branchIds: [store.id, store.id],
+      })
+    ).status,
+  ).toBe(400);
+});
+it('HTTP blocks new links for inactive users, branches and organizations', async () => {
+  const a = await organization();
+  const b = await organization();
+  const store = await branch(b.id);
+  const user = await identity(a.id);
+  await db().user.update({ where: { id: user.user.id }, data: { active: false } });
+  expect(
+    (await request(`/organizations/${b.id}/memberships`, { userId: user.user.id })).status,
+  ).toBe(409);
+  await db().branch.update({ where: { id: store.id }, data: { active: false } });
+  expect(
+    (
+      await request(`/organizations/${b.id}/users`, {
+        name: 'User',
+        email: `${randomUUID()}@example.test`,
+        branchIds: [store.id],
+      })
+    ).status,
+  ).toBe(409);
+  await db().organization.update({ where: { id: b.id }, data: { active: false } });
+  expect(
+    (await request(`/organizations/${b.id}/branches`, { name: 'Branch', code: 'NEW' })).status,
+  ).toBe(403);
+  expect(
+    (
+      await request(`/organizations/${b.id}/users`, {
+        name: 'User',
+        email: `${randomUUID()}@example.test`,
+      })
+    ).status,
+  ).toBe(403);
+});
+it('HTTP paginated lists retain organization filter, including a foreign cursor', async () => {
+  const a = await organization('List A');
+  const b = await organization('List B');
+  await branch(a.id, 'A1');
+  await branch(a.id, 'A2');
+  const branchB = await branch(b.id);
+  const userA = await identity(a.id);
+  const userB = await identity(b.id);
+  const first = branchListResponseSchema.parse(
+    await (await request(`/organizations/${a.id}/branches?limit=1`)).json(),
+  );
+  expect(first.data).toHaveLength(1);
+  expect(first.pageInfo.hasNextPage).toBe(true);
+  const second = branchListResponseSchema.parse(
+    await (
+      await request(`/organizations/${a.id}/branches?limit=1&cursor=${first.pageInfo.nextCursor}`)
+    ).json(),
+  );
+  expect(second.data).toHaveLength(1);
+  expect(second.data[0]?.id).not.toBe(first.data[0]?.id);
+  expect(second.pageInfo.hasNextPage).toBe(false);
+  const foreignCursor = branchListResponseSchema.parse(
+    await (await request(`/organizations/${a.id}/branches?cursor=${branchB.id}`)).json(),
+  );
+  expect(foreignCursor.data.every((row) => row.organizationId === a.id)).toBe(true);
+  const membersA = memberListResponseSchema.parse(
+    await (await request(`/organizations/${a.id}/users`)).json(),
+  );
+  const membersB = memberListResponseSchema.parse(
+    await (await request(`/organizations/${b.id}/users`)).json(),
+  );
+  expect(membersA.data.map((row) => row.user.id)).toContain(userA.user.id);
+  expect(membersA.data).toHaveLength(2);
+  expect(membersB.data.map((row) => row.user.id)).toContain(userB.user.id);
+  expect(membersB.data).toHaveLength(2);
+});
+it('database rejects cross-tenant membership branch foreign keys, independently of API', async () => {
+  const a = await organization('FK A');
+  const b = await organization('FK B');
+  const storeA = await branch(a.id);
+  const storeB = await branch(b.id);
+  const memberA = await identity(a.id);
+  const memberB = await identity(b.id);
+  await expect(
+    db().membershipBranch.create({
+      data: { organizationId: a.id, membershipId: memberB.id, branchId: storeA.id },
+    }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+  await expect(
+    db().membershipBranch.create({
+      data: { organizationId: a.id, membershipId: memberA.id, branchId: storeB.id },
+    }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+  await expect(
+    db().organizationMembership.update({
+      where: { id: memberA.id },
+      data: { primaryBranchId: storeB.id },
+    }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+  await expect(
+    db().organizationMembership.update({
+      where: { id: memberA.id },
+      data: { primaryBranchId: storeA.id },
+    }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+});
+it('database rejects orphan branches and memberships, duplicate links and deletion of assigned primary branch', async () => {
+  await expect(
+    db().branch.create({ data: { organizationId: randomUUID(), name: 'Orphan', code: 'ORPHAN' } }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+  const org = await organization();
+  const store = await branch(org.id);
+  const member = await identity(org.id, [store.id]);
+  await expect(
+    db().organizationMembership.create({ data: { organizationId: org.id, userId: randomUUID() } }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+  await expect(
+    db().organizationMembership.create({
+      data: { organizationId: randomUUID(), userId: member.user.id },
+    }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+  await expect(
+    db().membershipBranch.create({
+      data: { organizationId: org.id, membershipId: member.id, branchId: store.id },
+    }),
+  ).rejects.toMatchObject({ code: 'P2002' });
+  await expect(
+    db().membershipBranch.delete({
+      where: {
+        organizationId_membershipId_branchId: {
+          organizationId: org.id,
+          membershipId: member.id,
+          branchId: store.id,
+        },
+      },
+    }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+});
+it('database enforces canonical email, code and document for direct writes', async () => {
+  const org = await organization();
+  await expect(
+    db().user.create({ data: { name: 'User', email: ' Upper@EXAMPLE.TEST ' } }),
+  ).rejects.toThrow();
+  await expect(
+    db().branch.create({ data: { organizationId: org.id, name: 'Branch', code: 'lowercase' } }),
+  ).rejects.toThrow();
+  await expect(
+    db().organization.create({ data: { name: 'Invalid doc', document: 'gb-123' } }),
+  ).rejects.toThrow();
+});
+it('Swagger documents implemented organizational contracts with bearer security and without internal password fields', async () => {
+  const document: unknown = await (await fetch(url + '/docs/openapi.json')).json();
+  expect(document).toHaveProperty('paths./api/v1/organizations.post');
+  expect(document).toHaveProperty('paths./api/v1/organizations/{organizationId}/memberships.post');
+  expect(JSON.stringify(document)).not.toContain('passwordHash');
+  expect(document).toHaveProperty(
+    'paths./api/v1/organizations/{organizationId}/users.post.requestBody.content.application/json.schema.additionalProperties',
+    false,
+  );
+});
+
+it('database migration history on an empty PostgreSQL contains all four successful immutable migrations', async () => {
+  const migrations = await db().$queryRaw<
+    { migration_name: string; finished_at: Date | null; rolled_back_at: Date | null }[]
+  >`SELECT migration_name, finished_at, rolled_back_at FROM "_prisma_migrations" ORDER BY migration_name`;
+  expect(migrations.map((row) => row.migration_name)).toEqual([
+    '20261006130000_infrastructure_metadata',
+    '20261006144000_create_organization_branch_user_foundation',
+    '20261006180000_create_auth_sessions_rbac',
+    '20261006190000_enforce_grant_branch_reparenting',
+  ]);
+  expect(migrations.every((row) => row.finished_at !== null && row.rolled_back_at === null)).toBe(
+    true,
+  );
+});
+it('HTTP concurrent membership association relies on tenant-user uniqueness', async () => {
+  const source = await organization();
+  const target = await organization();
+  const member = await identity(source.id);
+  const results = await Promise.all([
+    request(`/organizations/${target.id}/memberships`, { userId: member.user.id }),
+    request(`/organizations/${target.id}/memberships`, { userId: member.user.id }),
+  ]);
+  expect(results.map((result) => result.status).sort()).toEqual([201, 409]);
+  expect(
+    await db().organizationMembership.count({
+      where: { organizationId: target.id, userId: member.user.id },
+    }),
+  ).toBe(1);
+});
+
+it('demo seed refuses production and returns a nonzero exit without changing data', async () => {
+  const before = await db().organization.count();
+  await expect(
+    execute(process.execPath, ['apps/api/dist/bootstrap/seed.js'], {
+      env: { ...environment, NODE_ENV: 'production' },
+    }),
+  ).rejects.toMatchObject({ code: 1 });
+  expect(await db().organization.count()).toBe(before);
+});
+
+async function authenticated(
+  path: string,
+  token: string,
+  payload?: unknown,
+  method = payload === undefined ? 'GET' : 'POST',
+) {
+  return fetch(url + '/api/v1' + path, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
+    },
+    ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+  });
+}
+async function credentialUser(organizationId: string, branches: string[] = []) {
+  const member = await identity(organizationId, branches);
+  const demo = await db().user.findUniqueOrThrow({ where: { email: 'admin.demo@example.test' } });
+  if (!demo.passwordHash) throw new Error('Demo hash not initialized');
+  await db().user.update({
+    where: { id: member.user.id },
+    data: { passwordHash: demo.passwordHash },
+  });
+  return member;
+}
+async function tenantRole(organizationId: string, code: string) {
+  return db().role.findUniqueOrThrow({ where: { organizationId_code: { organizationId, code } } });
+}
+async function assign(
+  organizationId: string,
+  membershipId: string,
+  code: string,
+  scope: 'OWN' | 'BRANCH' | 'BRANCH_SET' | 'ORGANIZATION',
+  branchIds: string[] = [],
+) {
+  const role = await tenantRole(organizationId, code);
+  const response = await request(
+    `/organizations/${organizationId}/memberships/${membershipId}/roles`,
+    { roleId: role.id, scope, branchIds },
+  );
+  expect(response.status).toBe(201);
+  const data: unknown = await response.json();
+  if (typeof data !== 'object' || data === null || !('id' in data) || typeof data.id !== 'string')
+    throw new Error('Assignment ID missing');
+  return data.id;
+}
+function sessionId(token: string) {
+  const id: unknown = decodeJwt(token)['sid'];
+  if (typeof id !== 'string') throw new Error('Session ID missing');
+  return id;
+}
+it('all seven phase-2 administrative routes reject anonymous requests, including writes', async () => {
+  const id = randomUUID();
+  for (const [path, payload] of [
+    ['/organizations', { name: 'Denied' }],
+    [`/organizations/${id}`, undefined],
+    [`/organizations/${id}/branches`, { name: 'Denied', code: 'DENIED' }],
+    [`/organizations/${id}/branches`, undefined],
+    [`/organizations/${id}/users`, { name: 'Denied', email: 'denied@example.test' }],
+    [`/organizations/${id}/users`, undefined],
+    [`/organizations/${id}/memberships`, { userId: randomUUID() }],
+  ] as const) {
+    const response = await fetch(url + '/api/v1' + path, {
+      ...(payload
+        ? {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          }
+        : {}),
+    });
+    expect(response.status).toBe(401);
+  }
+});
+it('login uses normalized email, secure cookie attributes, minimal JWT and hashed refresh storage', async () => {
+  const signed = await login(' ADMIN.DEMO@EXAMPLE.TEST ');
+  expect(signed.response.headers.get('set-cookie')).toContain('HttpOnly');
+  expect(signed.response.headers.get('set-cookie')).toContain('SameSite=Lax');
+  expect(signed.response.headers.get('set-cookie')).toContain('Path=/');
+  expect(signed.response.headers.get('cache-control')).toBe('no-store');
+  const me = await authRequest('/me', {}, { token: signed.body.accessToken, method: 'GET' });
+  expect(meResponseSchema.parse(await me.json()).user.id).toBe(signed.body.user.id);
+  const payload = decodeJwt(signed.body.accessToken);
+  expect(Object.keys(payload).sort()).toEqual(['aud', 'cv', 'exp', 'iat', 'iss', 'sid', 'sub']);
+  const raw = signed.cookie.split('=')[1];
+  if (!raw) throw new Error('Refresh missing');
+  const refresh = await db().refreshToken.findUniqueOrThrow({
+    where: { tokenHash: createHash('sha256').update(raw).digest('hex') },
+  });
+  expect(refresh.tokenHash).not.toBe(raw);
+  expect(JSON.stringify(signed.body)).not.toMatch(
+    /passwordHash|securityVersion|tokenHash|refreshToken/,
+  );
+  expect(signed.response.headers.get('access-control-allow-credentials')).toBe('true');
+});
+it('missing, wrong, inactive and credential-free users receive the same generic login error', async () => {
+  const org = await organization();
+  const inactive = await credentialUser(org.id);
+  const structural = await identity(org.id);
+  await db().user.update({ where: { id: inactive.user.id }, data: { active: false } });
+  const responses = await Promise.all([
+    authRequest('/login', {
+      email: `${randomUUID()}@example.test`,
+      password: 'Invalid password 1',
+    }),
+    authRequest('/login', { email: 'admin.demo@example.test', password: 'Invalid password 1' }),
+    authRequest('/login', {
+      email: inactive.user.email,
+      password: environment['SEED_ADMIN_PASSWORD'],
+    }),
+    authRequest('/login', {
+      email: structural.user.email,
+      password: environment['SEED_ADMIN_PASSWORD'],
+    }),
+  ]);
+  for (const response of responses) {
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({
+      code: 'UNAUTHENTICATED',
+      detail: 'Invalid credentials or session.',
+    });
+  }
+});
+it('cookie flows require allowed Origin and JSON; strict input blocks credential mass assignment', async () => {
+  const signed = await login();
+  expect(
+    (await authRequest('/refresh', {}, { cookie: signed.cookie, origin: 'https://evil.example' }))
+      .status,
+  ).toBe(403);
+  expect(
+    (
+      await fetch(url + '/api/v1/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: signed.cookie },
+        body: '{}',
+      })
+    ).status,
+  ).toBe(403);
+  expect(
+    (await authRequest('/logout', {}, { cookie: signed.cookie, origin: 'https://evil.example' }))
+      .status,
+  ).toBe(403);
+  expect(
+    (
+      await authRequest('/login', {
+        email: 'admin.demo@example.test',
+        password: environment['SEED_ADMIN_PASSWORD'],
+        active: true,
+      })
+    ).status,
+  ).toBe(400);
+  expect(
+    (await authRequest('/refresh', { refreshToken: signed.cookie }, { cookie: signed.cookie }))
+      .status,
+  ).toBe(400);
+  expect(
+    (
+      await fetch(url + '/api/v1/auth/login', {
+        method: 'POST',
+        headers: { Origin: 'http://localhost:3000', 'Content-Type': 'text/plain' },
+        body: '{}',
+      })
+    ).status,
+  ).toBe(400);
+  expect(
+    (await fetch(url + '/api/v1/auth/me', { headers: { Cookie: signed.cookie } })).status,
+  ).toBe(401);
+});
+it('one active membership auto-selects; multiple memberships require explicit context and invalidate prior access on switching', async () => {
+  const a = await organization();
+  const b = await organization();
+  const member = await credentialUser(a.id);
+  const single = await login(member.user.email);
+  expect(single.body.context?.organizationId).toBe(a.id);
+  expect(
+    (await request(`/organizations/${b.id}/memberships`, { userId: member.user.id })).status,
+  ).toBe(201);
+  const multiple = await login(member.user.email);
+  expect(multiple.body.context).toBeNull();
+  expect(multiple.body.memberships).toHaveLength(2);
+  expect((await authenticated(`/organizations/${a.id}`, multiple.body.accessToken)).status).toBe(
+    403,
+  );
+  const selected = await authRequest(
+    '/context',
+    { organizationId: a.id },
+    { token: multiple.body.accessToken },
+  );
+  expect(selected.status).toBe(200);
+  const body = authResponseSchema.parse(await selected.json());
+  expect(body.context?.membershipId).toBe(member.id);
+  expect(
+    (await authRequest('/me', {}, { token: multiple.body.accessToken, method: 'GET' })).status,
+  ).toBe(401);
+  const switched = await authRequest(
+    '/context',
+    { organizationId: b.id },
+    { token: body.accessToken },
+  );
+  expect(switched.status).toBe(200);
+  expect((await authRequest('/me', {}, { token: body.accessToken, method: 'GET' })).status).toBe(
+    401,
+  );
+});
+it('refresh rotates once; reuse commits family revocation and rejects both descendant refresh and access immediately', async () => {
+  const signed = await login();
+  const rotated = await authRequest('/refresh', {}, { cookie: signed.cookie });
+  expect(rotated.status).toBe(200);
+  const body = authResponseSchema.parse(await rotated.json());
+  const cookie = rotated.headers.get('set-cookie')?.split(';')[0];
+  if (!cookie) throw new Error('Rotated cookie missing');
+  expect(cookie).not.toBe(signed.cookie);
+  expect((await authRequest('/refresh', {}, { cookie: signed.cookie })).status).toBe(401);
+  expect((await authRequest('/refresh', {}, { cookie })).status).toBe(401);
+  expect((await authRequest('/me', {}, { token: body.accessToken, method: 'GET' })).status).toBe(
+    401,
+  );
+  expect(
+    (await db().session.findUniqueOrThrow({ where: { id: sessionId(body.accessToken) } }))
+      .revokedAt,
+  ).not.toBeNull();
+});
+it('concurrent refresh consumes a generation once and revokes the family upon detected reuse', async () => {
+  const signed = await login();
+  const responses = await Promise.all([
+    authRequest('/refresh', {}, { cookie: signed.cookie }),
+    authRequest('/refresh', {}, { cookie: signed.cookie }),
+  ]);
+  expect(responses.map((response) => response.status).sort()).toEqual([200, 401]);
+  expect(
+    await db().refreshToken.count({ where: { sessionId: sessionId(signed.body.accessToken) } }),
+  ).toBe(2);
+  expect(
+    (await db().session.findUniqueOrThrow({ where: { id: sessionId(signed.body.accessToken) } }))
+      .revokedAt,
+  ).not.toBeNull();
+});
+it('logout revokes only the current device; logout-all revokes all devices and refreshes', async () => {
+  const org = await organization();
+  const member = await credentialUser(org.id);
+  const one = await login(member.user.email);
+  const two = await login(member.user.email);
+  expect(sessionId(one.body.accessToken)).not.toBe(sessionId(two.body.accessToken));
+  expect((await authRequest('/logout', {}, { cookie: one.cookie })).status).toBe(204);
+  expect(
+    (await authRequest('/me', {}, { token: one.body.accessToken, method: 'GET' })).status,
+  ).toBe(401);
+  expect((await authRequest('/refresh', {}, { cookie: one.cookie })).status).toBe(401);
+  expect(
+    (await authRequest('/me', {}, { token: two.body.accessToken, method: 'GET' })).status,
+  ).toBe(200);
+  expect((await authRequest('/logout-all', {}, { token: two.body.accessToken })).status).toBe(204);
+  expect((await authRequest('/refresh', {}, { cookie: two.cookie })).status).toBe(401);
+});
+it('password change validates current password, enforces policy, replaces hash and revokes every device', async () => {
+  const org = await organization();
+  const member = await credentialUser(org.id);
+  const one = await login(member.user.email);
+  const two = await login(member.user.email);
+  const password = randomBytes(24).toString('base64url');
+  expect(
+    (
+      await authRequest(
+        '/change-password',
+        { currentPassword: 'wrong', newPassword: password },
+        { token: one.body.accessToken },
+      )
+    ).status,
+  ).toBe(401);
+  expect(
+    (
+      await authRequest(
+        '/change-password',
+        { currentPassword: environment['SEED_ADMIN_PASSWORD'], newPassword: 'short' },
+        { token: one.body.accessToken },
+      )
+    ).status,
+  ).toBe(400);
+  expect(
+    (
+      await authRequest(
+        '/change-password',
+        { currentPassword: environment['SEED_ADMIN_PASSWORD'], newPassword: password },
+        { token: one.body.accessToken },
+      )
+    ).status,
+  ).toBe(204);
+  for (const signed of [one, two]) {
+    expect(
+      (await authRequest('/me', {}, { token: signed.body.accessToken, method: 'GET' })).status,
+    ).toBe(401);
+    expect((await authRequest('/refresh', {}, { cookie: signed.cookie })).status).toBe(401);
+  }
+  expect(
+    (
+      await authRequest('/login', {
+        email: member.user.email,
+        password: environment['SEED_ADMIN_PASSWORD'],
+      })
+    ).status,
+  ).toBe(401);
+  expect((await login(member.user.email, password)).body.user.id).toBe(member.user.id);
+});
+it('rejects invalid signatures, algorithms, expiry, issuer, audience and forged session/context claims', async () => {
+  const signed = await login();
+  const payload = decodeJwt(signed.body.accessToken);
+  const key = Buffer.from(environment['JWT_SECRET'] ?? '', 'base64url');
+  const cases = [
+    { key: randomBytes(32), payload, algorithm: 'HS256' },
+    { key, payload, algorithm: 'HS384' },
+    { key, payload: { ...payload, exp: Math.floor(Date.now() / 1000) - 1 }, algorithm: 'HS256' },
+    { key, payload: { ...payload, iss: 'evil' }, algorithm: 'HS256' },
+    { key, payload: { ...payload, aud: 'other' }, algorithm: 'HS256' },
+    { key, payload: { ...payload, sid: randomUUID() }, algorithm: 'HS256' },
+    { key, payload: { ...payload, cv: 900 }, algorithm: 'HS256' },
+    {
+      key,
+      payload: { ...payload, exp: Math.floor(Date.now() / 1000) + 86400 },
+      algorithm: 'HS256',
+    },
+  ];
+  for (const item of cases) {
+    const token = await new SignJWT(item.payload)
+      .setProtectedHeader({ alg: item.algorithm, typ: 'JWT' })
+      .sign(item.key);
+    expect((await authRequest('/me', {}, { token, method: 'GET' })).status).toBe(401);
+  }
+});
+it('expired session rejects an otherwise valid access token and refresh token', async () => {
+  const signed = await login();
+  await db().session.update({
+    where: { id: sessionId(signed.body.accessToken) },
+    data: { expiresAt: new Date(Date.now() - 1000) },
+  });
+  expect(
+    (await authRequest('/me', {}, { token: signed.body.accessToken, method: 'GET' })).status,
+  ).toBe(401);
+  expect((await authRequest('/refresh', {}, { cookie: signed.cookie })).status).toBe(401);
+});
+it('active JWT never preserves inactive user, membership or organization authorization', async () => {
+  for (const kind of ['user', 'membership', 'organization'] as const) {
+    const org = await organization();
+    const member = await credentialUser(org.id);
+    await assign(org.id, member.id, 'VIEWER', 'ORGANIZATION');
+    const signed = await login(member.user.email);
+    if (kind === 'user')
+      await db().user.update({ where: { id: member.user.id }, data: { active: false } });
+    if (kind === 'membership')
+      await db().organizationMembership.update({
+        where: { id: member.id },
+        data: { active: false },
+      });
+    if (kind === 'organization')
+      await db().organization.update({ where: { id: org.id }, data: { active: false } });
+    expect(
+      (await authenticated(`/organizations/${org.id}/branches`, signed.body.accessToken)).status,
+    ).toBe(kind === 'user' ? 401 : 403);
+    expect((await authRequest('/refresh', {}, { cookie: signed.cookie })).status).toBe(401);
+  }
+});
+it('tenant A cannot read tenant B, assign its roles, use its branch or switch into B', async () => {
+  const a = await organization();
+  const b = await organization();
+  const storeB = await branch(b.id);
+  const memberA = await credentialUser(a.id);
+  const memberB = await credentialUser(b.id);
+  await assign(a.id, memberA.id, 'ADMIN', 'ORGANIZATION');
+  await assign(b.id, memberB.id, 'ADMIN', 'ORGANIZATION');
+  const signed = await login(memberA.user.email);
+  const roleB = await tenantRole(b.id, 'ADMIN');
+  for (const path of [
+    `/organizations/${b.id}`,
+    `/organizations/${b.id}/branches`,
+    `/organizations/${b.id}/users`,
+    `/organizations/${b.id}/roles`,
+  ])
+    expect((await authenticated(path, signed.body.accessToken)).status).toBe(404);
+  expect(
+    (
+      await authenticated(
+        `/organizations/${b.id}/memberships/${memberB.id}/roles`,
+        signed.body.accessToken,
+        { roleId: roleB.id, scope: 'ORGANIZATION' },
+      )
+    ).status,
+  ).toBe(404);
+  expect(
+    (
+      await authenticated(
+        `/organizations/${a.id}/memberships/${memberA.id}/roles`,
+        signed.body.accessToken,
+        { roleId: roleB.id, scope: 'ORGANIZATION' },
+      )
+    ).status,
+  ).toBe(403); // self modifications always denied
+  expect(
+    (
+      await authenticated(`/organizations/${a.id}/users`, signed.body.accessToken, {
+        name: 'Cross',
+        email: `${randomUUID()}@example.test`,
+        branchIds: [storeB.id],
+      })
+    ).status,
+  ).toBe(404);
+  expect(
+    (await authRequest('/context', { organizationId: b.id }, { token: signed.body.accessToken }))
+      .status,
+  ).toBe(403);
+});
+it('OWN, BRANCH and BRANCH_SET filter SQL before pagination and ORGANIZATION explicitly reaches future branches', async () => {
+  const org = await organization();
+  const a = await branch(org.id, 'A');
+  const b = await branch(org.id, 'B');
+  const c = await branch(org.id, 'C');
+  const own = await credentialUser(org.id, [a.id]);
+  const manager = await credentialUser(org.id, [a.id, b.id]);
+  const multi = await credentialUser(org.id, [a.id, b.id, c.id]);
+  const director = await credentialUser(org.id);
+  await assign(org.id, own.id, 'SELLER', 'OWN');
+  await assign(org.id, manager.id, 'SALES_MANAGER', 'BRANCH', [a.id]);
+  await assign(org.id, multi.id, 'SALES_MANAGER', 'BRANCH_SET', [a.id, b.id]);
+  await assign(org.id, director.id, 'DIRECTOR', 'ORGANIZATION');
+  const ownLogin = await login(own.user.email);
+  const ownList = memberListResponseSchema.parse(
+    await (await authenticated(`/organizations/${org.id}/users`, ownLogin.body.accessToken)).json(),
+  );
+  expect(ownList.data.map((row) => row.id)).toEqual([own.id]);
+  const managerLogin = await login(manager.user.email);
+  const branchList = branchListResponseSchema.parse(
+    await (
+      await authenticated(`/organizations/${org.id}/branches`, managerLogin.body.accessToken)
+    ).json(),
+  );
+  expect(branchList.data.map((row) => row.id)).toEqual([a.id]);
+  const members = memberListResponseSchema.parse(
+    await (
+      await authenticated(`/organizations/${org.id}/users`, managerLogin.body.accessToken)
+    ).json(),
+  );
+  expect(members.data.every((row) => row.branchIds.every((id) => id === a.id))).toBe(true);
+  const multiLogin = await login(multi.user.email);
+  const stores = branchListResponseSchema.parse(
+    await (
+      await authenticated(`/organizations/${org.id}/branches`, multiLogin.body.accessToken)
+    ).json(),
+  );
+  expect(stores.data.map((row) => row.id).sort()).toEqual([a.id, b.id].sort());
+  const filtered = branchListResponseSchema.parse(
+    await (
+      await authenticated(`/organizations/${org.id}/branches?limit=1`, multiLogin.body.accessToken)
+    ).json(),
+  );
+  expect(filtered.data).toHaveLength(1);
+  expect(filtered.pageInfo.hasNextPage).toBe(true);
+  const future = await branch(org.id, 'FUTURE');
+  const directorLogin = await login(director.user.email);
+  const all = branchListResponseSchema.parse(
+    await (
+      await authenticated(`/organizations/${org.id}/branches`, directorLogin.body.accessToken)
+    ).json(),
+  );
+  expect(all.data.map((row) => row.id)).toContain(future.id);
+  expect(
+    (
+      await authenticated(`/organizations/${org.id}/branches`, managerLogin.body.accessToken, {
+        name: 'Denied',
+        code: 'DENIED',
+      })
+    ).status,
+  ).toBe(403);
+});
+it('removing grant or membership branch immediately removes access with the same JWT', async () => {
+  const org = await organization();
+  const store = await branch(org.id);
+  const user = await credentialUser(org.id, [store.id]);
+  const grant = await assign(org.id, user.id, 'SELLER', 'BRANCH', [store.id]);
+  const signed = await login(user.user.email);
+  expect(
+    (await authenticated(`/organizations/${org.id}/branches`, signed.body.accessToken)).status,
+  ).toBe(200);
+  const admin = await adminToken(org.id);
+  expect(
+    (
+      await authenticated(
+        `/organizations/${org.id}/memberships/${user.id}/roles/${grant}`,
+        admin,
+        undefined,
+        'DELETE',
+      )
+    ).status,
+  ).toBe(204);
+  expect(
+    (await authenticated(`/organizations/${org.id}/branches`, signed.body.accessToken)).status,
+  ).toBe(403);
+  await assign(org.id, user.id, 'SELLER', 'BRANCH', [store.id]);
+  await db().branch.update({ where: { id: store.id }, data: { active: false } });
+  expect(
+    (await authenticated(`/organizations/${org.id}/branches`, signed.body.accessToken)).status,
+  ).toBe(403);
+});
+it('roles without permissions fail closed and organization admin does not inherit platform creation', async () => {
+  const org = await organization();
+  const user = await credentialUser(org.id);
+  const signed = await login(user.user.email);
+  expect((await authenticated(`/organizations/${org.id}`, signed.body.accessToken)).status).toBe(
+    403,
+  );
+  await assign(org.id, user.id, 'ADMIN', 'ORGANIZATION');
+  expect((await authenticated(`/organizations/${org.id}`, signed.body.accessToken)).status).toBe(
+    200,
+  );
+  expect(
+    (
+      await authenticated('/organizations', signed.body.accessToken, {
+        name: 'Forbidden global creation',
+      })
+    ).status,
+  ).toBe(403);
+});
+it('role management blocks self elevation, over-delegation, foreign roles/memberships, ALL and extra fields', async () => {
+  const org = await organization();
+  const other = await organization();
+  const manager = await credentialUser(org.id);
+  const target = await credentialUser(org.id);
+  const foreign = await credentialUser(other.id);
+  await assign(org.id, manager.id, 'DIRECTOR', 'ORGANIZATION');
+  const signed = await login(manager.user.email);
+  const admin = await tenantRole(org.id, 'ADMIN');
+  const viewer = await tenantRole(org.id, 'VIEWER');
+  const foreignRole = await tenantRole(other.id, 'VIEWER');
+  const route = `/organizations/${org.id}/memberships/${target.id}/roles`;
+  expect(
+    (
+      await authenticated(route, signed.body.accessToken, {
+        roleId: admin.id,
+        scope: 'ORGANIZATION',
+      })
+    ).status,
+  ).toBe(403);
+  expect(
+    (
+      await authenticated(
+        `/organizations/${org.id}/memberships/${manager.id}/roles`,
+        signed.body.accessToken,
+        { roleId: viewer.id, scope: 'ORGANIZATION' },
+      )
+    ).status,
+  ).toBe(403);
+  expect(
+    (
+      await authenticated(route, signed.body.accessToken, {
+        roleId: foreignRole.id,
+        scope: 'ORGANIZATION',
+      })
+    ).status,
+  ).toBe(404);
+  expect(
+    (
+      await authenticated(
+        `/organizations/${org.id}/memberships/${foreign.id}/roles`,
+        signed.body.accessToken,
+        { roleId: viewer.id, scope: 'ORGANIZATION' },
+      )
+    ).status,
+  ).toBe(404);
+  expect(
+    (await authenticated(route, signed.body.accessToken, { roleId: viewer.id, scope: 'ALL' }))
+      .status,
+  ).toBe(400);
+  expect(
+    (
+      await authenticated(route, signed.body.accessToken, {
+        roleId: viewer.id,
+        scope: 'ORGANIZATION',
+        organizationId: other.id,
+      })
+    ).status,
+  ).toBe(400);
+  expect(
+    (
+      await authenticated(route, signed.body.accessToken, {
+        roleId: viewer.id,
+        scope: 'ORGANIZATION',
+      })
+    ).status,
+  ).toBe(201);
+});
+it('permission and scope from separate roles cannot be combined into broader read or delegation', async () => {
+  const org = await organization();
+  const a = await branch(org.id, 'A');
+  const b = await branch(org.id, 'B');
+  const actor = await credentialUser(org.id, [a.id, b.id]);
+  const target = await credentialUser(org.id, [a.id, b.id]);
+  await assign(org.id, actor.id, 'SELLER', 'BRANCH', [a.id]);
+  const usersManage = await db().permission.findUniqueOrThrow({ where: { code: 'users.manage' } });
+  const restrictedManager = await db().role.create({
+    data: {
+      organizationId: org.id,
+      code: 'GRANT_MANAGER',
+      name: 'Grant manager',
+      description: 'Synthetic policy fixture',
+    },
+  });
+  await db().rolePermission.create({
+    data: { organizationId: org.id, roleId: restrictedManager.id, permissionId: usersManage.id },
+  });
+  await assign(org.id, actor.id, 'GRANT_MANAGER', 'ORGANIZATION');
+  const signed = await login(actor.user.email);
+  const response = branchListResponseSchema.parse(
+    await (
+      await authenticated(`/organizations/${org.id}/branches`, signed.body.accessToken)
+    ).json(),
+  );
+  expect(response.data.map((row) => row.id)).toEqual([a.id]);
+  const seller = await tenantRole(org.id, 'SELLER');
+  expect(
+    (
+      await authenticated(
+        `/organizations/${org.id}/memberships/${target.id}/roles`,
+        signed.body.accessToken,
+        { roleId: seller.id, scope: 'ORGANIZATION' },
+      )
+    ).status,
+  ).toBe(403);
+});
+it('concurrent duplicate role assignment is protected by unique constraints', async () => {
+  const org = await organization();
+  const target = await credentialUser(org.id);
+  const role = await tenantRole(org.id, 'VIEWER');
+  const results = await Promise.all([
+    request(`/organizations/${org.id}/memberships/${target.id}/roles`, {
+      roleId: role.id,
+      scope: 'OWN',
+    }),
+    request(`/organizations/${org.id}/memberships/${target.id}/roles`, {
+      roleId: role.id,
+      scope: 'OWN',
+    }),
+  ]);
+  expect(results.map((row) => row.status).sort()).toEqual([201, 409]);
+});
+it('database rejects cross-tenant roles, unauthorized grant branches, platform-in-role and malformed scope cardinality', async () => {
+  const a = await organization();
+  const b = await organization();
+  const storeA = await branch(a.id);
+  const memberA = await credentialUser(a.id, [storeA.id]);
+  const memberB = await credentialUser(b.id);
+  const roleA = await tenantRole(a.id, 'SELLER');
+  const roleB = await tenantRole(b.id, 'SELLER');
+  await expect(
+    db().userRole.create({
+      data: { organizationId: a.id, membershipId: memberB.id, roleId: roleA.id, scope: 'OWN' },
+    }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+  await expect(
+    db().userRole.create({
+      data: { organizationId: a.id, membershipId: memberA.id, roleId: roleB.id, scope: 'OWN' },
+    }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+  await expect(
+    db().userRole.create({
+      data: { organizationId: a.id, membershipId: memberA.id, roleId: roleA.id, scope: 'ALL' },
+    }),
+  ).rejects.toThrow();
+  await expect(
+    db().userRole.create({
+      data: {
+        organizationId: a.id,
+        membershipId: memberA.id,
+        roleId: roleA.id,
+        scope: 'BRANCH',
+        scopeKey: 'a'.repeat(64),
+      },
+    }),
+  ).rejects.toThrow();
+  const permission = await db().permission.findUniqueOrThrow({
+    where: { code: 'organizations.create' },
+  });
+  await expect(
+    db().rolePermission.create({
+      data: { organizationId: a.id, roleId: roleA.id, permissionId: permission.id },
+    }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+  const grant = await assign(a.id, memberA.id, 'SELLER', 'BRANCH', [storeA.id]);
+  const unassigned = await branch(a.id, 'UNASSIGNED');
+  await expect(
+    db().userRoleBranch.create({
+      data: {
+        organizationId: a.id,
+        userRoleId: grant,
+        membershipId: memberB.id,
+        branchId: unassigned.id,
+      },
+    }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+});
+it('Redis login and refresh limits return 429/Retry-After and do not trust spoofed proxy headers', async () => {
+  const redis = new Redis({
+    host: environment['REDIS_HOST'],
+    port: Number(environment['REDIS_PORT']),
+    password: environment['REDIS_PASSWORD'],
+    lazyConnect: true,
+  });
+  await redis.connect();
+  try {
+    for (const kind of ['login', 'refresh'] as const) {
+      const key = `auth:rate:${kind}:ip:${createHash('sha256').update('127.0.0.1').digest('hex')}`;
+      await redis.set(key, '1000', 'PX', 5000);
+      const response = await fetch(url + '/api/v1/auth/' + kind, {
+        method: 'POST',
+        headers: {
+          Origin: 'http://localhost:3000',
+          'Content-Type': 'application/json',
+          'X-Forwarded-For': '203.0.113.1',
+        },
+        body: JSON.stringify(
+          kind === 'login'
+            ? { email: 'admin.demo@example.test', password: environment['SEED_ADMIN_PASSWORD'] }
+            : {},
+        ),
+      });
+      expect(response.status).toBe(429);
+      expect(Number(response.headers.get('retry-after'))).toBeGreaterThan(0);
+      await redis.del(key);
+    }
+  } finally {
+    await redis.quit();
+  }
+});
+it('Redis failure closes authentication throttling with 503, while liveness remains truthful', async () => {
+  await compose('pause', 'redis');
+  try {
+    const response = await authRequest('/login', {
+      email: 'admin.demo@example.test',
+      password: environment['SEED_ADMIN_PASSWORD'],
+    });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toHaveProperty('code', 'AUTH_UNAVAILABLE');
+    expect((await fetch(url + '/health/live')).status).toBe(200);
+  } finally {
+    await compose('unpause', 'redis');
+  }
+  await until(
+    async () => (await fetch(url + '/health/ready')).status === 200,
+    'Redis auth recovery',
+  );
+});
+it('seed remains idempotent for roles, permissions, grants and password, without resetting changed credentials', async () => {
+  const demo = await db().user.findUniqueOrThrow({ where: { email: 'admin.demo@example.test' } });
+  const before = {
+    roles: await db().role.count(),
+    permissions: await db().permission.count(),
+    grants: await db().userRole.count(),
+    hash: demo.passwordHash,
+  };
+  await execute(process.execPath, ['apps/api/dist/bootstrap/seed.js'], { env: environment });
+  await execute(process.execPath, ['apps/api/dist/bootstrap/seed.js'], { env: environment });
+  const after = await db().user.findUniqueOrThrow({ where: { id: demo.id } });
+  expect({
+    roles: await db().role.count(),
+    permissions: await db().permission.count(),
+    grants: await db().userRole.count(),
+    hash: after.passwordHash,
+  }).toEqual(before);
+});
+it('OpenAPI specifies Bearer on administrative routes and logs contain no credentials or tokens', async () => {
+  const document: unknown = await (await fetch(url + '/docs/openapi.json')).json();
+  expect(document).toHaveProperty('components.securitySchemes.bearer');
+  expect(document).toHaveProperty('paths./api/v1/organizations.post.security');
+  expect(document).toHaveProperty('paths./api/v1/auth/login.post.requestBody');
+  const signed = await login();
+  const logs = children.flatMap((child) => child.logs).join('');
+  expect(logs).not.toContain(signed.body.accessToken);
+  expect(logs).not.toContain(signed.cookie);
+  expect(logs).not.toContain(environment['SEED_ADMIN_PASSWORD']);
+  expect(logs).not.toContain(environment['JWT_SECRET']);
+  expect(logs).not.toContain(environment['DATABASE_URL']);
+  expect(logs).not.toContain('$argon2id$');
+});
+
+it('scope cardinality remains enforced when moving a branch between grants directly in PostgreSQL', async () => {
+  const org = await organization();
+  const store = await branch(org.id);
+  const member = await credentialUser(org.id, [store.id]);
+  const first = await assign(org.id, member.id, 'SELLER', 'BRANCH', [store.id]);
+  const second = await assign(org.id, member.id, 'SALES_MANAGER', 'BRANCH_SET', [store.id]);
+  await expect(
+    db().$transaction(async (transaction) => {
+      await transaction.userRoleBranch.deleteMany({ where: { userRoleId: second } });
+      await transaction.userRoleBranch.update({
+        where: {
+          organizationId_userRoleId_branchId: {
+            organizationId: org.id,
+            userRoleId: first,
+            branchId: store.id,
+          },
+        },
+        data: { userRoleId: second },
+      });
+    }),
+  ).rejects.toThrow();
+  expect(await db().userRoleBranch.count({ where: { userRoleId: first } })).toBe(1);
+  expect(await db().userRoleBranch.count({ where: { userRoleId: second } })).toBe(1);
+});
+it('session context and refresh predecessor cannot point to a different identity or family', async () => {
+  const a = await organization();
+  const b = await organization();
+  const userA = await credentialUser(a.id);
+  const userB = await credentialUser(b.id);
+  await expect(
+    db().session.create({
+      data: {
+        userId: userA.user.id,
+        membershipId: userB.id,
+        securityVersion: 0,
+        expiresAt: new Date(Date.now() + 60000),
+      },
+    }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+  const one = await login(userA.user.email);
+  const two = await login(userB.user.email);
+  const predecessor = await db().refreshToken.findFirstOrThrow({
+    where: { sessionId: sessionId(one.body.accessToken) },
+  });
+  await expect(
+    db().refreshToken.create({
+      data: {
+        sessionId: sessionId(two.body.accessToken),
+        predecessorId: predecessor.id,
+        tokenHash: randomBytes(32).toString('hex'),
+      },
+    }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+});
+it('the IP-plus-email login limit normalizes identity and is atomic under concurrent attempts', async () => {
+  const redis = new Redis({
+    host: environment['REDIS_HOST'],
+    port: Number(environment['REDIS_PORT']),
+    password: environment['REDIS_PASSWORD'],
+    lazyConnect: true,
+  });
+  await redis.connect();
+  const email = `${randomUUID()}@example.test`;
+  const key = `auth:rate:login:identity:${createHash('sha256').update(`127.0.0.1:${email}`).digest('hex')}`;
+  try {
+    await redis.set(key, '499', 'PX', 300000);
+    const responses = await Promise.all([
+      authRequest('/login', { email: email.toUpperCase(), password: 'Invalid password' }),
+      authRequest('/login', { email: ` ${email} `, password: 'Invalid password' }),
+    ]);
+    expect(responses.map((row) => row.status).sort()).toEqual([401, 429]);
+    expect(await redis.get(key)).toBe('501');
+  } finally {
+    await redis.del(key);
+    await redis.quit();
+  }
+});
+
+it('password change racing login and refresh never leaves an old-credential session usable', async () => {
+  const org = await organization();
+  const member = await credentialUser(org.id);
+  const current = await login(member.user.email);
+  const second = await login(member.user.email);
+  const newPassword = randomBytes(24).toString('base64url');
+  const [changed, concurrentLogin, concurrentRefresh] = await Promise.all([
+    authRequest(
+      '/change-password',
+      { currentPassword: environment['SEED_ADMIN_PASSWORD'], newPassword },
+      { token: current.body.accessToken },
+    ),
+    authRequest('/login', {
+      email: member.user.email,
+      password: environment['SEED_ADMIN_PASSWORD'],
+    }),
+    authRequest('/refresh', {}, { cookie: second.cookie }),
+  ]);
+  expect(changed.status).toBe(204);
+  for (const response of [concurrentLogin, concurrentRefresh]) {
+    expect([200, 401]).toContain(response.status);
+    if (response.status === 200) {
+      const issued = authResponseSchema.parse(await response.json());
+      expect(
+        (await authRequest('/me', {}, { token: issued.accessToken, method: 'GET' })).status,
+      ).toBe(401);
+    }
+  }
+  expect(
+    (await authRequest('/me', {}, { token: current.body.accessToken, method: 'GET' })).status,
+  ).toBe(401);
+  expect((await login(member.user.email, newPassword)).body.user.id).toBe(member.user.id);
+});

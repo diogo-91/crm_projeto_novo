@@ -1,0 +1,46 @@
+{
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "name": "crm",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=24.19.0 <25",
+    "pnpm": "11.19.0"
+  },
+  "scripts": {
+    "env:init": "node scripts/init-env.mjs",
+    "dev": "dotenv -e .env -- turbo run dev",
+    "build": "dotenv -e .env -v NODE_ENV=production -- turbo run build",
+    "lint": "dotenv -e .env -- turbo run lint && eslint scripts tests *.mts *.mjs && prettier --check .",
+    "typecheck": "dotenv -e .env -- turbo run typecheck && tsc --noEmit -p tsconfig.json",
+    "test": "dotenv -e .env -- turbo run test",
+    "test:integration": "dotenv -e .env -- turbo run build --filter=@crm/api --filter=@crm/worker && vitest run --config vitest.integration.config.mts",
+    "format": "prettier --write .",
+    "db:generate": "turbo run build --filter=@crm/config && dotenv -e .env -- pnpm --filter @crm/database db:generate",
+    "db:migrate": "pnpm db:generate && dotenv -e .env -- pnpm --filter @crm/database db:migrate:deploy",
+    "db:migrate:dev": "pnpm db:generate && dotenv -e .env -- pnpm --filter @crm/database db:migrate:dev",
+    "db:seed": "dotenv -e .env -- turbo run build --filter=@crm/api && dotenv -e .env -- pnpm --filter @crm/database db:seed",
+    "infra:up": "docker compose up -d --wait postgres redis",
+    "infra:down": "docker compose down",
+    "queue:probe": "dotenv -e .env -- pnpm --filter @crm/api queue:probe"
+  },
+  "devDependencies": {
+    "@crm/config": "workspace:*",
+    "@crm/eslint-config": "workspace:*",
+    "@crm/typescript-config": "workspace:*",
+    "@swc/core": "1.16.13",
+    "@types/node": "24.19.1",
+    "dotenv-cli": "11.0.0",
+    "eslint": "10.12.0",
+    "prettier": "3.9.9",
+    "turbo": "2.11.7",
+    "typescript": "6.0.3",
+    "vitest": "5.0.3",
+    "vite": "8.3.2",
+    "@crm/database": "workspace:*",
+    "@crm/contracts": "workspace:*",
+    "jose": "6.2.12",
+    "ioredis": "6.0.0"
+  }
+}

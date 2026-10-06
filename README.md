@@ -1,0 +1,237 @@
+# CRM — fundação, organizações, autenticação e RBAC
+
+Monorepo pnpm/Turborepo com web Next.js, API NestJS e worker Nest Application Context. A fase 2 acrescenta Organization, Branch, User global e memberships à infraestrutura existente. A fase 3 implementa autenticação e RBAC; todos os endpoints administrativos exigem sessão e autorização. O frontend mantém sua página técnica, sem login ou funcionalidades comerciais. ADR-012 encerra a exceção de API aberta do ADR-011. Leia AGENTS.md e os documentos de arquitetura antes de contribuir.
+
+## Requisitos
+
+- Node.js **24.19.0** (arquivo `.node-version`), pnpm **11.19.0**.
+- Docker Engine e Docker Compose v2 com suporte a `up --wait`.
+- Portas locais 3000, 3001, 5432 e 6379 disponíveis; PostgreSQL/Redis não são publicados fora do loopback.
+
+Instale a versão de pnpm indicada em `packageManager` com seu gerenciador de ferramentas ou `npm install -g pnpm@11.19.0`. Não use force/legacy-peer-deps. pnpm 11 utiliza `pnpm-workspace.yaml` para política de instalação, peers e builds nativos. O lockfile fixa a árvore; TLS/checksums permanecem habilitados.
+
+## Primeiro início
+
+Execute **na raiz do repositório**:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm env:init
+pnpm infra:up
+pnpm db:generate
+pnpm db:migrate
+pnpm db:seed
+pnpm dev
+```
+
+`env:init` cria `.env` com permissões 0600, senhas aleatórias e secret JWT de 32 bytes **exclusivamente para o desenvolvimento local**, sem imprimir valores. Recusa sobrescrever arquivo existente. Alternativa: copie `.env.example` para `.env` e preencha DATABASE_URL, POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET e SEED_ADMIN_PASSWORD; mantenha a senha da URL coerente com a do serviço PostgreSQL. Nunca use credenciais locais em produção ou faça commit de `.env`.
+
+PostgreSQL e Redis rodam em Docker; web/API/worker rodam diretamente por pnpm, com compilação/watch. Turborepo compila dependências antes de iniciar cada consumidor; bibliotecas têm watch e API/worker usam tsc-watch, preservando metadata de decorators Nest. Não há container HTTP no worker e não existe serviço adicional de Evolution/storage/proxy.
+
+`infra:up` espera **healthchecks reais** dos containers; ter container started não prova readiness da API. `pnpm dev` falha se configuração/dependências exigidas faltarem. Espere logs `API ready` e `worker ready`; não interprete o banner do runner como prova de startup.
+
+### Endereços locais
+
+| Recurso                      | Endereço padrão                         |
+| ---------------------------- | --------------------------------------- |
+| Página técnica               | http://localhost:3000                   |
+| API estrutural local         | http://localhost:3001/api/v1            |
+| Resumo técnico               | http://localhost:3001/health            |
+| Liveness                     | http://localhost:3001/health/live       |
+| Readiness PostgreSQL + Redis | http://localhost:3001/health/ready      |
+| Swagger UI                   | http://localhost:3001/docs              |
+| OpenAPI JSON                 | http://localhost:3001/docs/openapi.json |
+
+Estes endereços são instruções para executar o projeto **localmente**, não previews publicados do ambiente em nuvem. A página web tem apenas “CRM / Sistema em configuração.”. Não cria requests simuladas nem mostra funcionalidades inexistentes.
+
+## Configuração
+
+O parsing de processos está centralizado em `@crm/config/server` e o parsing público web em `@crm/config/web`. A API/worker validam ao inicializar; os erros listam nomes dos campos inválidos, nunca valores. Variáveis específicas da API/DB não são exigidas no worker técnico, que neste momento só consome Redis/BullMQ. `.env` é carregado uma vez pelos comandos da raiz via dotenv-cli; não há cópias do arquivo em cada aplicação.
+
+| Variável                                        | Uso                                                                                              |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| NODE_ENV                                        | development/test/production; obrigatória para API/worker                                         |
+| API_PORT                                        | porta da API, inteiro 1–65535                                                                    |
+| DATABASE_URL                                    | PostgreSQL válido, requerido API e ferramentas Prisma                                            |
+| REDIS_HOST / REDIS_PORT                         | conexão Redis, obrigatórias API/worker                                                           |
+| REDIS_PASSWORD                                  | opcional na biblioteca quando a instalação não exige senha; **obrigatória no Compose fornecido** |
+| CORS_ORIGINS                                    | lista de origens HTTP(S) separadas por vírgula, sem path, slash final ou wildcard                |
+| LOG_LEVEL                                       | trace/debug/info/warn/error/fatal; padrão info                                                   |
+| NEXT_PUBLIC_API_URL                             | URL HTTP(S) pública, validada no config Next; nunca secrets                                      |
+| POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD | bootstrap do container PostgreSQL                                                                |
+| POSTGRES_PORT                                   | porta local publicada, padrão 5432                                                               |
+
+Se alterar POSTGRES_PASSWORD depois de criar o volume, a imagem PostgreSQL não altera automaticamente a senha existente. Use procedimento SQL autorizado para alterar o usuário e a URL de forma coerente, ou recrie **apenas um volume local descartável** após confirmar que pode perder os dados. `infra:down` preserva volumes; não há reset destrutivo automático. Não imprima `docker compose config` ou ambientes completos com secrets em logs públicos.
+
+## Banco, migrations e seed
+
+Prisma está em `packages/database`, schema em `prisma/schema.prisma`, config em `prisma.config.ts`, migrations em `prisma/migrations`, client gerado/ignorado em `src/generated/prisma` e compilado com o pacote. Runtime Prisma 7 usa adapter PostgreSQL; a API possui um DatabaseService singleton gerenciado pelo Nest e um pool de no máximo cinco conexões. Não há client global improvisado.
+
+As migrations da fase 1/2 são: `20261006130000_infrastructure_metadata` (preservada) e `20261006144000_create_organization_branch_user_foundation`. A segunda cria somente Organization, Branch, User, OrganizationMembership e MembershipBranch, com FKs compostas, uniques e CHECKs documentados em DATABASE.md. Não cria entidades comerciais, credenciais ou RBAC. A fase 3 adiciona `20261006180000_create_auth_sessions_rbac` e `20261006190000_enforce_grant_branch_reparenting`, preservando o histórico; a segunda reforça cardinalidade quando uma filial é movida entre grants por escrita direta. Readiness executa `SELECT 1`; a integração usa PostgreSQL real novo e verifica o histórico aplicado.
+
+```bash
+pnpm db:generate
+pnpm db:migrate                   # migrate deploy: aplica migrations existentes
+pnpm db:migrate:dev --name nome_da_mudanca  # somente banco local descartável
+pnpm db:seed                      # dados demo + credencial via env e RBAC
+```
+
+Os comandos da raiz preparam o pacote config/cliente quando necessário. Não rodar `migrate dev`, reset ou `db push` em produção. Migrations não são executadas por startup da API/worker. Deployment/credenciais DDL de produção são responsabilidade de uma etapa operacional autorizada.
+
+## Qualidade e testes
+
+```bash
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm test:integration
+```
+
+- `lint`: ESLint tipado (promises, unsafe types, imports e Next/React hooks) e Prettier único.
+- `typecheck`: strict, exact optional properties, unchecked indexes e demais configs compartilhadas; verifica também configuração/tooling.
+- `test`: Vitest único com SWC preservando decorators/metadata, testes de config, contratos, logging, correlação, UI técnica, handler e HTTP Nest. Os testes HTTP usam doubles de dependência; não alegam conexão real.
+- `test:integration`: cria projeto Compose **separado**, credenciais aleatórias, portas efêmeras e banco/volumes exclusivos. Aplica todas as migrations desde um banco vazio, repete deploy/seed, verifica idempotência e constraints multi-tenant, testa API estrutural/rollback/concorrência e paginação, sobe API/worker compilados como processos separados, verifica health/Swagger e job producer→worker. Pausa PostgreSQL/Redis individualmente, exige 503 de readiness e 200 de liveness, recupera sem reiniciar API e verifica shutdown. Remove apenas seus próprios containers/volumes/arquivos temporários.
+- `build`: Turborepo ordena bibliotecas, API, worker e Next. Sem excluir aplicação para passar.
+
+Docker deve estar disponível para integração. Falta de Docker/serviço é **falha**, não skip nem sucesso falso. Suites unitárias não precisam de containers; podem precisar compilar bibliotecas e gerar cliente a partir da configuração local. A integração não usa dados nem volumes de desenvolvimento. CI executa lint/typecheck/test/build e integração.
+
+Para validar a fila manualmente, com o worker iniciado e builds concluídos:
+
+```bash
+pnpm queue:probe
+```
+
+A fila **foundation-probe** valida payload e devolve correlationId; não é endpoint público nem fila comercial. Retém até 100 resultados/falhas, concurrency 1 e retries exponenciais limitados. Seu objetivo é diagnóstico, sem efeito comercial e sem promessa de entrega durável/outbox. Não reaproveitar isso para mensagens reais sem ADR-007 e controles de tenant.
+
+## Validação da fase 1 — histórico
+
+Em 2026-10-06, passaram `pnpm install` (também instalação congelada), `pnpm lint`, `pnpm typecheck`, `pnpm test` e `pnpm build`, com todas as aplicações incluídas. Foram executados 38 testes unitários/HTTP e 8 de integração; nenhum teste ignorado. O smoke de `pnpm dev` verificou conteúdo SSR, CSS Tailwind, health/live/ready, Swagger UI/assets/OpenAPI e job técnico produzido pela API e processado pelo worker separado. A integração verificou migration/seed repetidos, 503 quando cada dependência é pausada, recuperação e shutdown com logs completos/código zero. Esses resultados validam desenvolvimento, não deploy de produção ou execução do workflow GitHub Actions.
+
+## Operação básica e segurança
+
+Logs JSON com timestamp, level, context, msg e correlação quando pertinente. Cada request recebe UUID requestId novo; X-Correlation-Id válido pode ser reutilizado (1–64 caracteres alfanuméricos, `_`/`-`), senão é substituído pelo requestId. Ambos retornam em headers; logs HTTP não contêm body/query/Authorization/cookies. Erros de infraestrutura são registrados sem URL/senha e `/health/ready` responde 503 com estados up/down. `/health/live` não consulta dependências. Swagger documenta health e as sete operações estruturais atuais, incluindo contratos Zod e erros seguros. Logs de criação contêm somente IDs estruturais/contexto; não contêm nomes, documentos ou e-mails.
+
+Helmet aplica headers. CORS permite só origens configuradas com credentials=true. Auth/RBAC e Origin/JSON para cookies estão implementados conforme ADR-012; RLS, auditoria comercial e WebSocket permanecem nos marcos correspondentes. Este ambiente é de desenvolvimento, não deployment seguro de produção.
+
+Ctrl+C/SIGTERM drena worker, fecha fila/client Redis e Prisma. Não depende de PID/porta para readiness. Para parar a infraestrutura sem apagar dados:
+
+```bash
+pnpm infra:down
+```
+
+Redis usa AOF/noeviction e volume; PostgreSQL 18 usa volume em `/var/lib/postgresql`, conforme layout da imagem. Imagens estão fixadas por digest. Backup/HA/restore/outbox comerciais exigem implementação e validação nas fases previstas.
+
+## Execução em sandbox na nuvem
+
+Em runtimes que não permitem gravar no diretório pessoal, use os diretórios XDG suportados pelo pnpm/compilador nativo, fora do checkout e sob `/tmp` com proteção sticky do sistema. Isso ajusta armazenamento local de ferramentas; não muda o aplicativo nem desativa verificação dos artefatos:
+
+```bash
+export XDG_DATA_HOME=/tmp/crm-runtime/data
+export XDG_CACHE_HOME=/tmp/crm-runtime/cache
+```
+
+Na nuvem, o container hospedeiro desta tarefa usa PID 1 sem coleta de processos órfãos. O comando de startup utiliza o **Tini 0.19.0 já fornecido pelo Docker**, como subreaper, para supervisionar e recolher os descendentes do pnpm/Turborepo:
+
+```bash
+exec docker-init -s -- pnpm dev
+```
+
+Isso configura corretamente a supervisão do runtime Linux; não altera pnpm dev, código das aplicações ou sinais Nest. Foi validado startup/readiness e encerramento com um único Ctrl+C, sem timeout do supervisor. A saída 130 após Ctrl+C representa interrupção intencional da sessão; API/worker registram shutdown complete e a integração exige código zero quando recebem SIGTERM como processos próprios. Em sua máquina normal, use pnpm dev com o init do sistema; os ajustes XDG/subreaper não são necessários. Se o sandbox mapear a raiz do filesystem para outro proprietário, o SWC pode rejeitar a cadeia de confiança mesmo com XDG correto. Nesse caso executar ferramentas nativas no runtime real pelo mecanismo de permissões suportado pelo ambiente; não alterar proprietário da raiz, patchar o addon ou desabilitar sua verificação. O `.env` local é privado e não acompanha clones/snapshots compartilhados por Git; cada pessoa inicializa suas credenciais. Consulte `docs/adr/ADR-010-fundacao-tecnica.md` para matriz e decisões de implementação.
+
+## Organização e identidade — endpoints agora protegidos
+
+Seed usa bootstrap Nest standalone da API e gateways dos donos, é transacional/idempotente, exclusivo para desenvolvimento/testes, e recusa NODE_ENV=production. Cria marcador foundation/versão 1, Organização demo, Loja 1/LOJA_1, Loja 2/LOJA_2, Loja 3/LOJA_3, Tatuí/TATUI e Votorantim/VOTORANTIM. Cria `admin.demo@example.test` com nome Administrador demo, uma OrganizationMembership, cinco MembershipBranch e Loja 1 como principal. Na fase 3 esse usuário recebe senha somente via SEED_ADMIN_PASSWORD e grant ADMIN/ORGANIZATION na organização demo. Identidades criadas via API permanecem estruturais sem senha até provisionamento legítimo. Repetir não duplica nem sobrescreve perfis/desativações existentes.
+
+User tem identidade/e-mail global; a participação organizacional e a filial principal ficam no membership. Para vincular uma identidade já existente, informar seu UUID no endpoint memberships. Não cadastrar novamente ou associar automaticamente por e-mail. Código de filial é uppercase/único por organização. Documento opcional normaliza pontuação de apresentação sem validação fiscal ou unicidade global sem país/emissor. Organização, usuário ou filial inativos bloqueiam novas associações; listagens podem mostrar inativos para inspeção. Não há endpoint de alteração/desativação nesta fase.
+
+| Método | Caminho (prefixo `/api/v1`)                | Resultado                                            |
+| ------ | ------------------------------------------ | ---------------------------------------------------- |
+| POST   | /organizations                             | 201, organização criada                              |
+| GET    | /organizations/:id                         | 200, organização                                     |
+| POST   | /organizations/:organizationId/branches    | 201, filial criada                                   |
+| GET    | /organizations/:organizationId/branches    | 200, lista paginada de filiais                       |
+| POST   | /organizations/:organizationId/users       | 201, identidade nova + membership na mesma transação |
+| GET    | /organizations/:organizationId/users       | 200, memberships paginados com identidade pública    |
+| POST   | /organizations/:organizationId/memberships | 201, vínculo explícito de identidade existente       |
+
+Listas: `?limit=25&cursor=<uuid>` (1–100 itens, cursor opcional), ordenadas por UUID crescente, retornam `{data,pageInfo:{nextCursor,hasNextPage}}`. Ordenação é estável, não cronológica. Bodies rejeitam propriedades extras. Invalid input → 400; recurso inexistente/filial de outro tenant → 404; unique/inativo → 409. Erros RFC 9457 incluem code e requestId sem payload sensível/SQL. Requests/responses estão no Swagger. O frontend não mudou.
+
+Exemplo local (depois de instalar, migrar e iniciar o ambiente):
+
+Cada operação exige Bearer e TenantContext validado. Path não concede acesso. GET organização exige organizations.read/ORGANIZATION; criação de filiais exige branches.manage/ORGANIZATION; identidades/memberships exigem users.manage/ORGANIZATION. Listas exigem branches.read ou users.read com filtro de escopo no banco. POST organizações exige a capacidade de plataforma explícita, não o papel ADMIN tenant.
+
+## Validação da fase 2 — histórico
+
+Em 2026-10-06, passaram instalação congelada, lint, typecheck, test, test:integration e build completo via Turborepo. São **88 testes: 52 unitários, 9 HTTP com dependências controladas e 27 de integração com PostgreSQL/Redis reais**; estes últimos incluem 12 cenários HTTP organizacionais, constraints, isolamento estrutural, concorrência, migration limpa e seed idempotente. A cobertura da fase 1 foi mantida. Seed em NODE_ENV=production falha com código não zero, sem alterar dados. PostgreSQL indisponível causa 500 seguro nas queries estruturais, além de readiness 503, sem mascarar a falha.
+
+O banco local que continha apenas a migration técnica recebeu a segunda migration sem reset; seed foi executado duas vezes. O smoke pnpm dev iniciou API, worker e frontend, validou health/live/ready, Swagger/OpenAPI, consultas da organização demo/cinco filiais/membership e o job técnico producer→worker. O frontend manteve a página técnica. CI existente já executa os comandos e a suite ampliada; o workflow remoto não foi executado nesta sessão. Essa validação comprova desenvolvimento local e integridade referencial, não autorização HTTP ou prontidão de produção.
+
+## Auth e RBAC — fase 3
+
+Variáveis novas (validadas apenas onde necessárias):
+
+| Variável                   | Regra                                                                                                    |
+| -------------------------- | -------------------------------------------------------------------------------------------------------- |
+| JWT_SECRET                 | obrigatório para API; 32 bytes aleatórios, base64url canônica (43 caracteres); sem default               |
+| JWT_ISSUER / JWT_AUDIENCE  | crm-api / crm-web por padrão; devem coincidir nos emissores/verificadores                                |
+| ACCESS_TOKEN_TTL_SECONDS   | 900 padrão; permitido 60–900                                                                             |
+| SESSION_TTL_SECONDS        | 2592000 padrão; permitido 3600–2592000; prazo absoluto                                                   |
+| AUTH_LOGIN_IP_LIMIT        | 30/min por IP, 1–10000                                                                                   |
+| AUTH_LOGIN_IDENTITY_LIMIT  | 5/5min por IP+hash do e-mail normalizado, 1–1000                                                         |
+| AUTH_REFRESH_IP_LIMIT      | 60/min por IP, 1–10000                                                                                   |
+| SEED_ADMIN_PASSWORD        | obrigatório somente no seed local/teste; 12–128 caracteres; nunca embutido                               |
+| SEED_ADMIN_EMAIL           | admin.demo@example.test padrão; identidade normalizada                                                   |
+| SEED_PLATFORM_PROVISIONING | false padrão; true concede somente organizations.create por 24h com motivo; nenhum acesso global a dados |
+
+Para um clone novo, pnpm env:init gera secrets privados e aleatórios. Para instalação existente, preencha as novas variáveis em .env sem mudar as senhas PostgreSQL/Redis já usadas pelos volumes. Secrets da API não são exigidos nem enviados ao worker. Argon2id 0.45.1 e JOSE 6.2.12 são compatíveis com Node 24; não há adaptador JWT concorrente, pacote cookie-parser ou fornecedor de e-mail antecipado. pnpm allowBuilds autoriza o addon oficial Argon2.
+
+Seed não redefine senha existente nem duplica roles/permissões/grants. Para trocar senha use o endpoint autenticado; senha demo só existe em desenvolvimento/testes e seed recusa production. Templates tenant: ADMIN, DIRECTOR, SALES_MANAGER, SELLER, AFTER_SALES, VIEWER. Catálogo de oito permissões implementadas; nenhuma permissão comercial fictícia. Não existe SUPER_ADMIN global. Para validar criação de novas organizações localmente, habilite SEED_PLATFORM_PROVISIONING=true antes do seed; não transforma ADMIN em administrador de outros tenants.
+
+| Método/rota sob /api/v1                                                             | Proteção/efeito                                                                     |
+| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| POST /auth/login                                                                    | Origin/JSON e limites Redis; e-mail/senha, cookie refresh, access e contexto seguro |
+| POST /auth/refresh                                                                  | Origin/JSON e limite Redis; cookie, body {}; rotação atômica                        |
+| POST /auth/logout                                                                   | Origin/JSON, cookie, body {}; revoga somente sua sessão, limpa cookie               |
+| POST /auth/logout-all                                                               | Bearer, body {}; revoga todos os dispositivos                                       |
+| GET /auth/me                                                                        | Bearer; identidade/contexto seguros                                                 |
+| POST /auth/context                                                                  | Bearer + organizationId; verifica membership, invalida access antigo da sessão      |
+| POST /auth/change-password                                                          | Bearer + currentPassword/newPassword; revoga todas as sessões, limpa cookie         |
+| GET /organizations/:organizationId/roles                                            | roles.read/ORGANIZATION                                                             |
+| GET /organizations/:organizationId/permissions                                      | roles.read/ORGANIZATION; catálogo implementado                                      |
+| POST /organizations/:organizationId/memberships/:membershipId/roles                 | users.manage/ORGANIZATION, sem autoatribuição/escalada                              |
+| DELETE /organizations/:organizationId/memberships/:membershipId/roles/:assignmentId | mesma política; 204                                                                 |
+
+Login/refresh/logout precisam do header Origin exatamente em CORS_ORIGINS e Content-Type application/json, inclusive no Swagger/CLI. Para usar Try it out nos fluxos de cookie, sirva o Swagger pela origem permitida de publicação ou configure explicitamente sua origem local; nenhuma origem extra é habilitada implicitamente. Refresh não vai no body; cookie HttpOnly/Lax/Path=/ e Secure/__Host-crm-refresh em produção. Desenvolvimento usa crm_refresh sem Secure para HTTP local. O plano de publicação é mesma origem por proxy TLS; não usar SameSite=None ou Domain amplo para contornar configuração incorreta.
+
+Access JWT (HS256, issuer/audience/typ/exp/iat validados) fica em memória no cliente futuro; não localStorage. Session e grants são relidos no banco a cada autorização. Uma membership ativa é auto-selecionada somente quando única; com várias, context=null e seleção obrigatória. Troca de contexto invalida access anterior do mesmo dispositivo. Logout, troca de senha, inativação e revogação de grants têm efeito imediato. Refresh expira com a sessão em até 30 dias, registra só hash e histórico. Reuso inclusive concorrente revoga família; o cliente futuro deverá coordenar refresh single-flight. Perda de resposta pode exigir novo login.
+
+Escopos OWN, BRANCH, BRANCH_SET (equivalente a MULTI_BRANCH), ORGANIZATION; ALL só no PlatformGrant temporal. Recursos sem owner/branch exigem política explícita. Role assignment valida filiais ativas do alvo, tenant de role/membership e autoridade de quem concede; não permite alterar a própria membership. Constraints compostas e triggers protegem integridade mesmo em escrita direta. Coleções filtram antes de paginação e projeções ocultam filiais não autorizadas.
+
+Erros: 400 validação, 401 credencial/sessão, 403 autorização/Origin, 404 recurso fora do contexto ou inexistente, 409 conflito, 429 limite com Retry-After, 503 rate limiting indisponível; erros inesperados são 500 seguros. Redis não possui fallback em memória; PostgreSQL é obrigatório para autenticação/autorização. Sem confiança em X-Forwarded-For até configuração autorizada de proxy. Logs de segurança contêm eventos e IDs sem senha, token, e-mail, URL do banco ou cookie.
+
+Exemplo local executável sem imprimir credenciais ou JWT (API iniciada):
+
+```bash
+node --env-file=.env --input-type=module <<'JS'
+const base = `http://localhost:${process.env.API_PORT}/api/v1`;
+const response = await fetch(`${base}/auth/login`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Origin: process.env.CORS_ORIGINS.split(',')[0] },
+  body: JSON.stringify({ email: process.env.SEED_ADMIN_EMAIL ?? 'admin.demo@example.test', password: process.env.SEED_ADMIN_PASSWORD }),
+});
+if (!response.ok) throw new Error(`Login HTTP ${response.status}`);
+const auth = await response.json();
+const me = await fetch(`${base}/auth/me`, { headers: { Authorization: `Bearer ${auth.accessToken}` } });
+if (!me.ok) throw new Error(`Me HTTP ${me.status}`);
+console.log({ login: response.status, me: me.status, organizationSelected: auth.context !== null });
+JS
+```
+
+Sem frontend de login, envio de e-mail, reset parcial, verificação de e-mail ou recursos comerciais nesta fase. Essas exclusões seguem a solicitação explícita e não são substituídas por tokens fake. Health/docs permanecem públicos técnicos; **nenhum endpoint administrativo é público**.
+
+## Validação da fase 3
+
+Em 2026-10-06, passaram install congelado, lint, typecheck, test, test:integration e build completo. **140 testes: 75 unitários, 10 HTTP de fundação com dependências controladas e 55 integrações com PostgreSQL/Redis reais**. As integrações preservam os 27 cenários anteriores e adicionam 28 de auth/RBAC/segurança, incluindo token roubado/reuso, refresh concorrente, senha versus login/refresh, sessões independentes, Origin/cookies, JWT inválido/expirado, inativos, IDOR, OWN/BRANCH/BRANCH_SET/ORGANIZATION, grants mistos, escalada, limites concorrentes e integridade direta no banco.
+
+Migrations aplicadas do zero e novamente sem alterações; seed executado repetidamente, sem duplicar roles/permissões/grants nem redefinir senha. A atualização do banco local preservou dados da fase 2. Smoke pnpm dev verificou frontend e Tailwind, API/health/Swagger/assets/OpenAPI, proteção administrativa, login/me, rotação/reuso, worker e job técnico. Logs conferidos sem secrets. Encerramento supervisionado intencional devolveu 130 para Ctrl+C; os processos de integração mantêm shutdown controlado com código zero. O CI existente executa a suite ampliada; workflow remoto não foi executado nesta sessão. A validação comprova o ambiente local autorizado, sem alegar deploy de produção.

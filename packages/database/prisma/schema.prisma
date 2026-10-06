@@ -1,0 +1,245 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Marcador técnico da fase 1; migration original permanece imutável.
+model InfrastructureMetadata {
+  key       String   @id @db.VarChar(64)
+  version   Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("infrastructure_metadata")
+}
+
+model Organization {
+  id          String                   @id @default(uuid()) @db.Uuid
+  name        String                   @db.VarChar(160)
+  legalName   String?                  @map("legal_name") @db.VarChar(200)
+  document    String?                  @db.VarChar(64)
+  active      Boolean                  @default(true)
+  createdAt   DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  roles       Role[]
+  branches    Branch[]
+  memberships OrganizationMembership[]
+
+  @@map("organizations")
+}
+
+model Branch {
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @map("organization_id") @db.Uuid
+  name           String             @db.VarChar(160)
+  code           String             @db.VarChar(64)
+  active         Boolean            @default(true)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  memberships    MembershipBranch[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, code])
+  @@map("branches")
+}
+
+model User {
+  id              String                   @id @default(uuid()) @db.Uuid
+  name            String                   @db.VarChar(160)
+  email           String                   @unique @db.VarChar(254)
+  passwordHash    String?                  @map("password_hash") @db.VarChar(255)
+  securityVersion Int                      @default(0) @map("security_version")
+  sessions        Session[]
+  platformGrants  PlatformGrant[]
+  active          Boolean                  @default(true)
+  createdAt       DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  memberships     OrganizationMembership[]
+
+  @@map("users")
+}
+
+model OrganizationMembership {
+  id              String             @id @default(uuid()) @db.Uuid
+  organizationId  String             @map("organization_id") @db.Uuid
+  userId          String             @map("user_id") @db.Uuid
+  primaryBranchId String?            @map("primary_branch_id") @db.Uuid
+  active          Boolean            @default(true)
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user            User               @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  branches        MembershipBranch[] @relation("MembershipBranches")
+  userRoles       UserRole[]
+  sessions        Session[]
+  primaryBranch   MembershipBranch?  @relation("PrimaryBranch", fields: [organizationId, id, primaryBranchId], references: [organizationId, membershipId, branchId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, userId])
+  @@unique([userId, id])
+  @@index([userId])
+  @@map("organization_memberships")
+}
+
+model MembershipBranch {
+  id             String                   @id @default(uuid()) @db.Uuid
+  organizationId String                   @map("organization_id") @db.Uuid
+  membershipId   String                   @map("membership_id") @db.Uuid
+  branchId       String                   @map("branch_id") @db.Uuid
+  createdAt      DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  membership     OrganizationMembership   @relation("MembershipBranches", fields: [organizationId, membershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  branch         Branch                   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  roleBranches   UserRoleBranch[]
+  primaryFor     OrganizationMembership[] @relation("PrimaryBranch")
+
+  @@unique([organizationId, membershipId, branchId])
+  @@index([organizationId, branchId])
+  @@map("membership_branches")
+}
+
+enum AccessScope {
+  OWN
+  BRANCH
+  BRANCH_SET
+  ORGANIZATION
+  ALL
+}
+
+enum PermissionDomain {
+  ORGANIZATION
+  PLATFORM
+}
+
+model Role {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @map("organization_id") @db.Uuid
+  code           String           @db.VarChar(64)
+  name           String           @db.VarChar(160)
+  description    String           @db.VarChar(255)
+  system         Boolean          @default(false)
+  active         Boolean          @default(true)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  permissions    RolePermission[]
+  assignments    UserRole[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, code])
+  @@map("roles")
+}
+
+model Permission {
+  id              String           @id @default(uuid()) @db.Uuid
+  code            String           @unique @db.VarChar(64)
+  description     String           @db.VarChar(255)
+  domain          PermissionDomain
+  rolePermissions RolePermission[]
+  platformGrants  PlatformGrant[]
+
+  @@unique([id, domain])
+  @@map("permissions")
+}
+
+model RolePermission {
+  organizationId   String           @map("organization_id") @db.Uuid
+  roleId           String           @map("role_id") @db.Uuid
+  permissionId     String           @map("permission_id") @db.Uuid
+  permissionDomain PermissionDomain @default(ORGANIZATION) @map("permission_domain")
+  role             Role             @relation(fields: [organizationId, roleId], references: [organizationId, id], onDelete: Cascade, onUpdate: Restrict)
+  permission       Permission       @relation(fields: [permissionId, permissionDomain], references: [id, domain], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([organizationId, roleId, permissionId])
+  @@index([permissionId, permissionDomain])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  id             String                 @id @default(uuid()) @db.Uuid
+  organizationId String                 @map("organization_id") @db.Uuid
+  membershipId   String                 @map("membership_id") @db.Uuid
+  roleId         String                 @map("role_id") @db.Uuid
+  scope          AccessScope
+  scopeKey       String                 @default("none") @map("scope_key") @db.VarChar(64)
+  createdAt      DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+  membership     OrganizationMembership @relation(fields: [organizationId, membershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  role           Role                   @relation(fields: [organizationId, roleId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  branches       UserRoleBranch[]
+
+  @@unique([organizationId, id, membershipId])
+  @@unique([organizationId, membershipId, roleId, scope, scopeKey])
+  @@index([organizationId, roleId])
+  @@map("user_roles")
+}
+
+model UserRoleBranch {
+  organizationId   String           @map("organization_id") @db.Uuid
+  userRoleId       String           @map("user_role_id") @db.Uuid
+  membershipId     String           @map("membership_id") @db.Uuid
+  branchId         String           @map("branch_id") @db.Uuid
+  grant            UserRole         @relation(fields: [organizationId, userRoleId, membershipId], references: [organizationId, id, membershipId], onDelete: Cascade, onUpdate: Restrict)
+  membershipBranch MembershipBranch @relation(fields: [organizationId, membershipId, branchId], references: [organizationId, membershipId, branchId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([organizationId, userRoleId, branchId])
+  @@index([organizationId, membershipId, branchId])
+  @@map("user_role_branches")
+}
+
+model PlatformGrant {
+  id               String           @id @default(uuid()) @db.Uuid
+  userId           String           @map("user_id") @db.Uuid
+  permissionId     String           @map("permission_id") @db.Uuid
+  permissionDomain PermissionDomain @default(PLATFORM) @map("permission_domain")
+  scope            AccessScope      @default(ALL)
+  reason           String           @db.VarChar(255)
+  expiresAt        DateTime         @map("expires_at") @db.Timestamptz(6)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  user             User             @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  permission       Permission       @relation(fields: [permissionId, permissionDomain], references: [id, domain], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([userId, permissionId])
+  @@index([permissionId, permissionDomain])
+  @@map("platform_grants")
+}
+
+model Session {
+  id              String                  @id @default(uuid()) @db.Uuid
+  userId          String                  @map("user_id") @db.Uuid
+  membershipId    String?                 @map("membership_id") @db.Uuid
+  contextVersion  Int                     @default(0) @map("context_version")
+  securityVersion Int                     @map("security_version")
+  createdAt       DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+  expiresAt       DateTime                @map("expires_at") @db.Timestamptz(6)
+  revokedAt       DateTime?               @map("revoked_at") @db.Timestamptz(6)
+  lastUsedAt      DateTime                @default(now()) @map("last_used_at") @db.Timestamptz(6)
+  user            User                    @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  membership      OrganizationMembership? @relation(fields: [userId, membershipId], references: [userId, id], onDelete: Restrict, onUpdate: Restrict)
+  refreshTokens   RefreshToken[]
+
+  @@index([userId, revokedAt])
+  @@map("sessions")
+}
+
+model RefreshToken {
+  id            String         @id @default(uuid()) @db.Uuid
+  sessionId     String         @map("session_id") @db.Uuid
+  tokenHash     String         @unique @map("token_hash") @db.Char(64)
+  predecessorId String?        @unique @map("predecessor_id") @db.Uuid
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  usedAt        DateTime?      @map("used_at") @db.Timestamptz(6)
+  session       Session        @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  predecessor   RefreshToken?  @relation("RefreshChain", fields: [sessionId, predecessorId], references: [sessionId, id], onDelete: Restrict, onUpdate: Restrict)
+  successor     RefreshToken[] @relation("RefreshChain")
+
+  @@unique([sessionId, id])
+  @@map("refresh_tokens")
+}

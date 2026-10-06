@@ -1,0 +1,12 @@
+{
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "name": "@crm/typescript-config",
+  "exports": {
+    "./base.json": "./base.json",
+    "./node.json": "./node.json",
+    "./next.json": "./next.json",
+    "./library.json": "./library.json"
+  }
+}

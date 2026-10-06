@@ -1,0 +1,7 @@
+{
+  "extends": "@crm/typescript-config/library.json",
+  "compilerOptions": {
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "prisma.config.ts"]
+}

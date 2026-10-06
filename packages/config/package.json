@@ -1,0 +1,34 @@
+{
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "name": "@crm/config",
+  "exports": {
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    },
+    "./web": {
+      "types": "./dist/web.d.ts",
+      "default": "./dist/web.js"
+    }
+  },
+  "dependencies": {
+    "zod": "4.6.5",
+    "@crm/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@crm/eslint-config": "workspace:*",
+    "@crm/typescript-config": "workspace:*",
+    "typescript": "6.0.3",
+    "@types/node": "24.19.1"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "dev": "tsc --watch -p tsconfig.build.json",
+    "test": "vitest run --config ../../vitest.config.mts"
+  },
+  "type": "module"
+}
