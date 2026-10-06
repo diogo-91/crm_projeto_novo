@@ -73,6 +73,7 @@ export class AuthService {
             membershipId: context.membershipId,
             primaryBranchId: context.primaryBranchId,
             branches: context.branches,
+            permissions: [...new Set(context.grants.flatMap((grant) => grant.permissions))],
             roles: context.grants.map((grant) => ({
               id: grant.roleId,
               code: grant.code,

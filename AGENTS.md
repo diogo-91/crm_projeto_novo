@@ -2,7 +2,7 @@
 
 ## Estado e objetivo
 
-Este repositório inicia um CRM comercial multiempresa e multiloja. A fase 0 definiu os documentos. A fase 1 criou a fundação técnica. A fase 2 adiciona Organization, Branch, User global, OrganizationMembership e MembershipBranch, com API estrutural mínima local. A fase 3 implementa credenciais Argon2id, JWT curto, sessões/refresh rotativos e RBAC com escopos. Não há módulos comerciais. A exceção de endpoints administrativos públicos do ADR-011 foi encerrada pelo ADR-012. Consulte README.md para instalação e operação. Não confundir decisões planejadas com funcionalidades implementadas. Implementar somente a etapa explicitamente autorizada pelo solicitante; não antecipar telas, CRUDs, autenticação ou integrações.
+Este repositório inicia um CRM comercial multiempresa e multiloja. A fase 0 definiu os documentos. A fase 1 criou a fundação técnica. A fase 2 adiciona Organization, Branch, User global, OrganizationMembership e MembershipBranch, com API estrutural mínima local. A fase 3 implementa credenciais Argon2id, JWT curto, sessões/refresh rotativos e RBAC com escopos. A fase 4 adiciona design system, layout responsivo, páginas-base e integração web de sessão. Não há módulos comerciais. A exceção de endpoints administrativos públicos do ADR-011 foi encerrada pelo ADR-012. Consulte README.md para instalação e operação. Não confundir decisões planejadas com funcionalidades implementadas. Implementar somente a etapa explicitamente autorizada pelo solicitante; não antecipar telas, CRUDs, autenticação ou integrações.
 
 Ler antes de alterar o projeto:
 
@@ -54,8 +54,9 @@ Executar na raiz após `pnpm install`, `pnpm env:init` e preparo da infraestrutu
 | raiz      | `pnpm dev`                            | Turborepo inicia web/API/worker                                                    |
 | raiz      | `pnpm build`                          | build e geração necessária em ordem topológica                                     |
 | raiz      | `pnpm lint` / `pnpm typecheck`        | análise estática                                                                   |
-| raiz      | `pnpm test`                           | testes unitários                                                                   |
+| raiz      | `pnpm test`                           | testes unitários/HTTP técnicos e DOM frontend                                      |
 | raiz      | `pnpm test:integration`               | integração técnica com serviços/processos isolados; E2E comercial ainda não existe |
+| raiz      | `pnpm test:e2e`                       | build e jornadas web com Playwright/API/PostgreSQL/Redis isolados                  |
 | raiz      | `pnpm db:generate`                    | gerar Prisma Client                                                                |
 | raiz      | `pnpm db:migrate:dev --name <nome>`   | criar migration em banco local descartável                                         |
 | raiz      | `pnpm db:migrate`                     | aplicar migrations revisadas no ambiente autorizado                                |
@@ -107,7 +108,7 @@ Migrations são versionadas e revisadas junto ao schema. Prisma gera alteraçõe
 
 Verificar limites dos módulos, isolamento por organização/filial, autorização do recurso, integridade referencial, concorrência, idempotência, compatibilidade de contratos, logs sem secrets e consultas com índices. Atualizar documentação e ADR quando uma decisão mudar. Não corrigir uma arquitetura por meio de dependência circular ou dependência nova sem necessidade comprovada.
 
-No estágio atual, implementar somente a fase 3 autorizada. Não iniciar fase 4, telas, contatos, pipeline, recuperação de senha ou WhatsApp sem nova solicitação. Não usar any, supressões TypeScript/ESLint, monkey patch, erro silencioso, fallback de infraestrutura, peers forçados ou exclusão de apps do build para contornar problemas. Corrigir a causa, revalidar e documentar decisões em ADR.
+No estágio atual, implementar somente a fase 4 autorizada: design system, navegação e integração web com a autenticação existente. Não iniciar fase 5, contatos, pipeline, recuperação de senha ou WhatsApp sem nova solicitação. Não usar any, supressões TypeScript/ESLint, monkey patch, erro silencioso, fallback de infraestrutura, peers forçados ou exclusão de apps do build para contornar problemas. Corrigir a causa, revalidar e documentar decisões em ADR.
 
 ## Fundação organizacional implementada
 
@@ -119,8 +120,17 @@ Organizations usa camadas domain/application/infrastructure/presentation; owns O
 - Access JWT HS256 validado por JOSE; secret aleatório base64url de 32 bytes obrigatório. Claims mínimos sub/sid/cv/iat/exp/iss/aud. Toda autenticação consulta Session+User atuais; não existe cache de RBAC/sessões, blacklist Redis ou SUPER_ADMIN com bypass global.
 - Session.contextVersion invalida access anterior na seleção de contexto; User.securityVersion invalida sessões concorrentes na troca de senha/logout-all. Refresh histórico por hash SHA-256, família por sessão, lock de sessão e revogação confirmada antes de lançar erro de reuso. Nunca lançar dentro da transação a exceção que desfaz a revogação.
 - Senha 12–128 caracteres, sem trim/truncamento; Argon2id m=65536,t=3,p=1. Identidade estrutural pode continuar com hash nulo: não autentica. Seed é executado por bootstrap Nest standalone na API, usando gateways dos donos; packages/database guarda somente schema/client/migrations/configuração técnica.
-- Cookie refresh HttpOnly/Lax/Path=/; Secure e __Host- em produção. Login/refresh/logout exigem Origin permitido e JSON. Bearer protege rotas comuns; cookie sozinho não autentica recursos. CORS explícito com credentials. Access fica em memória no cliente futuro; nunca localStorage.
+- Cookie refresh HttpOnly/Lax/Path=/; Secure e __Host- em produção. Login/refresh/logout exigem Origin permitido e JSON. Bearer protege rotas comuns; cookie sozinho não autentica recursos. CORS explícito com credentials. Access fica em memória na web; nunca localStorage.
 - Read models de segurança em AccessControl e Session fazem joins somente de leitura autorizados, documentados no ADR-012. Queries comerciais devem continuar usando interfaces públicas. Writes administrativos revalidam grants sob lock da membership; atribuição/remove ordenam locks ator/alvo.
 - BRANCH_SET é o nome aprovado para MULTI_BRANCH. ALL existe apenas no PlatformGrant temporal; nunca em UserRole. A API não cria grants de plataforma nem modifica a própria atribuição de papel.
 - Listas filtram tenant/escopo no SQL antes de paginação e reduzem metadados de filiais na projeção. Scope OWN para usuários lista somente a própria membership; diretório de filiais limita-se às filiais ativas vinculadas. Recursos comerciais futuros sem owner/branch continuam negados sem política explícita.
 - Logs de segurança contêm IDs e tipo de evento, sem e-mail, cookie, senha, hash ou JWT. Rate limits Redis atômicos, falha 503; não criar fallback local.
+
+## Frontend da fase 4
+
+- Leia ADR-013 e docs/DESIGN_SYSTEM.md. Primitives/tokens ficam em packages/ui; não duplicar em apps/web/components/ui. Components.json registra o workspace shadcn/new-york. Usar tokens semânticos e Lucide.
+- Páginas/layouts são Server Components; interação em components/layout, components/navigation e features/auth. Não serializar credenciais nem dados privados em RSC pelo gate de UX. Backend autoriza dados.
+- ApiClient é a única camada fetch. SessionClient é o único proprietário de access em memória; AuthProvider/useSyncExternalStore só distribui estado. Refresh single-flight + Web Locks, BroadcastChannel sem tokens; não criar segunda implementação de auth/BFF/storage. Falhas de infraestrutura aparecem em estado de erro.
+- Can/usePermission usa context.permissions do backend como indicação de ação, sem reproduzir scopes ou inferir permissões pelo papel. Mudança de membership/identidade cancela requests e descarta dados anteriores. TanStack Query só entra quando houver dados interativos, com isolamento/limpeza do ADR-009.
+- pnpm test inclui DOM frontend; pnpm test:e2e constrói e executa Playwright com API/PostgreSQL/Redis reais isolados. Requer Docker, Chromium e portas frontend/API livres. Pode usar PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH para browser instalado. No CI, instalar Chromium via Playwright. Não salvar traces/storageState com credenciais.
+- Playwright usa somente seu projeto Compose descartável e remove seus próprios volumes. .runtime/browser-fixture.json é privado, 0600/ignorado e removido ao encerrar. Capturas .runtime são somente revisão local, nunca Git.

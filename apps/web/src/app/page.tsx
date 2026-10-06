@@ -1,4 +1,4 @@
-import { FoundationStatus } from '../components/foundation-status';
+import { redirect } from 'next/navigation';
 export default function Home() {
-  return <FoundationStatus />;
+  return redirect('/dashboard');
 }

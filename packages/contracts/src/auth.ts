@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { uuidSchema, userResponseSchema } from './organizations.js';
+import { permissionCodeSchema } from './access-control.js';
 import { emailSchema, newPasswordSchema } from './identity.js';
 export const loginSchema = z
   .object({ email: emailSchema, password: z.string().min(1).max(128) })
@@ -19,6 +20,7 @@ const context = z
     membershipId: uuidSchema,
     primaryBranchId: uuidSchema.nullable(),
     branches: z.array(z.object({ id: uuidSchema, name: z.string(), code: z.string() }).strict()),
+    permissions: z.array(permissionCodeSchema),
     roles: z.array(
       z
         .object({

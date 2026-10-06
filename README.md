@@ -235,3 +235,37 @@ Sem frontend de login, envio de e-mail, reset parcial, verificação de e-mail o
 Em 2026-10-06, passaram install congelado, lint, typecheck, test, test:integration e build completo. **140 testes: 75 unitários, 10 HTTP de fundação com dependências controladas e 55 integrações com PostgreSQL/Redis reais**. As integrações preservam os 27 cenários anteriores e adicionam 28 de auth/RBAC/segurança, incluindo token roubado/reuso, refresh concorrente, senha versus login/refresh, sessões independentes, Origin/cookies, JWT inválido/expirado, inativos, IDOR, OWN/BRANCH/BRANCH_SET/ORGANIZATION, grants mistos, escalada, limites concorrentes e integridade direta no banco.
 
 Migrations aplicadas do zero e novamente sem alterações; seed executado repetidamente, sem duplicar roles/permissões/grants nem redefinir senha. A atualização do banco local preservou dados da fase 2. Smoke pnpm dev verificou frontend e Tailwind, API/health/Swagger/assets/OpenAPI, proteção administrativa, login/me, rotação/reuso, worker e job técnico. Logs conferidos sem secrets. Encerramento supervisionado intencional devolveu 130 para Ctrl+C; os processos de integração mantêm shutdown controlado com código zero. O CI existente executa a suite ampliada; workflow remoto não foi executado nesta sessão. A validação comprova o ambiente local autorizado, sem alegar deploy de produção.
+
+## Interface e sessão web — fase 4
+
+Após os mesmos requisitos, pnpm install --frozen-lockfile, pnpm env:init (somente clone novo), pnpm infra:up, pnpm db:migrate e pnpm db:seed, execute pnpm dev. A web usa /login e redireciona / para /dashboard. Utilize o e-mail do seed (padrão admin.demo@example.test) e a senha privada SEED_ADMIN_PASSWORD do .env; nunca copie credenciais para Git/logs. O seed não redefine senhas já existentes. API/worker/health/Swagger preservam os comandos e URLs anteriores.
+
+CORS_ORIGINS deve conter exatamente a origem da web; NEXT_PUBLIC_API_URL aponta ao prefixo /api/v1. Em desenvolvimento, use localhost de forma consistente na web/API para cookies SameSite, sem alternar para 127.0.0.1 no navegador. Produção mantém publicação por uma origem TLS conforme ADR-008; não há deploy nesta tarefa. O navegador precisa suportar Web Locks/BroadcastChannel em origem segura; localhost é aceito. Não ler cookie HttpOnly, armazenar tokens em storage ou flexibilizar CORS.
+
+Login/refresh/logout/context usam a API real. Uma membership ativa escolhe contexto automaticamente; várias exigem seleção. Sidebar recolhível salva somente preferência visual local. Cmd/Ctrl+K navega páginas; menu do usuário encerra a sessão no backend. Recarregar restaura por refresh single-flight, também coordenado entre abas. Perda da resposta de rotação pode exigir novo login; erros de infraestrutura não são mascarados.
+
+Design system em docs/DESIGN_SYSTEM.md e decisões em ADR-013. Todas as rotas do menu são bases visuais, sem funcionalidades comerciais; Configurações inclui uma demonstração técnica isolada de componentes, sem painel administrativo.
+
+Testes adicionais:
+
+```bash
+pnpm test
+pnpm exec playwright install --with-deps chromium
+pnpm test:e2e
+```
+
+Vitest DOM cobre UI, validação, estado e cliente HTTP. test:e2e executa build e inicia API/web de produção local com PostgreSQL/Redis novos, migrations/seed e memberships A/B próprias. Não reutiliza nem modifica o banco de desenvolvimento. Pare pnpm dev antes: web 3000 e a porta de NEXT_PUBLIC_API_URL devem estar livres. O runner exige URL de API loopback terminada em /api/v1. Remove somente volumes do projeto crm-browser-* ao encerrar. A fixture temporária privada fica em .runtime (ignorado) e é apagada; traces/storageState/screenshots de falhas ficam desativados para não persistir credenciais.
+
+Em ambiente com Chromium já instalado, alternativamente:
+
+```bash
+PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium pnpm test:e2e
+```
+
+A configuração oficial executablePath seleciona esse browser, sem alterar Playwright ou dependências. Na nuvem, use o supervisor docker-init -s documentado para a execução prolongada. Testes avaliam 375/768/1024/1440/1920px, axe, teclado/overlays, login/logout/refresh/revogação, todas as rotas e troca ADMIN A → VIEWER B. Respostas HTTP 401 de refresh sem cookie são esperadas na entrada de visitante; erros de aplicação/hydration são falhas.
+
+## Validação da fase 4
+
+Em 2026-10-06, passaram install congelado, lint, typecheck, test, test:integration, build de todos os apps/pacotes e test:e2e. **197 testes: 118 unitários (incluem 44 frontend/DOM), 10 HTTP, 55 integrações PostgreSQL/Redis e 14 E2E**. Todos os testes anteriores foram preservados. Canal BroadcastChannel nativo cobre comunicação com outra aba sem receber o próprio evento. Browser real valida concorrência de refresh/abas, isolamento de capacidades A/B, revogação, teclados/dialogs, rotas, 404, fonte Geist carregada e axe. Login, Dashboard, Configurações e navegação passaram nas cinco larguras, sem overflow global, erros de aplicação ou hydration. Somente o 401 esperado de refresh de visitante é reconhecido por mensagem e URL exatas.
+
+pnpm dev foi executado com os volumes existentes: PostgreSQL/Redis saudáveis, quatro migrations sem pendências e seed preservando credenciais. Health/live/ready, Swagger/OpenAPI, login do admin demo, refresh, logout, Ctrl+K e processamento pelo worker separado passaram. Artefatos públicos não contêm os secrets do servidor; .env permanece privado/ignorado e fixtures E2E foram removidas. Nenhuma migration ou funcionalidade comercial adicional. O CI preserva seus checks e adiciona Playwright/Chromium; sua execução remota não foi verificada nesta sessão. A fase 4 está concluída; a fase 5 depende de nova solicitação.

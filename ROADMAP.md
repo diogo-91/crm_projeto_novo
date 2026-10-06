@@ -2,7 +2,7 @@
 
 ## Como executar
 
-Cada fase deve ser dividida em PRs pequenos, com contrato, implementação autorizada, testes e documentação. Este roadmap **não autoriza execução das próximas fases**. As fases 0, 1 e 2 estão concluídas; a solicitação atual autoriza somente Auth/RBAC da fase 3. Não gerar todos os módulos/arquivos de uma vez. Decisões só ganham infraestrutura quando um consumidor real precisar.
+Cada fase deve ser dividida em PRs pequenos, com contrato, implementação autorizada, testes e documentação. Este roadmap **não autoriza execução das próximas fases**. As fases 0, 1, 2, 3 e 4 estão concluídas; a fase 5 exige nova solicitação. Não gerar todos os módulos/arquivos de uma vez. Decisões só ganham infraestrutura quando um consumidor real precisar.
 
 Definition of Done de uma feature: critérios de negócio claros; isolamento organização/filial/carteira; autorização granular; validação e erros; contrato OpenAPI; migration revisada quando existir; testes críticos; logs sem secrets; UI acessível quando pertinente. Falhas conhecidas e testes não executados são explícitos. Nenhuma fase é concluída apenas por scaffold/build.
 
@@ -50,14 +50,16 @@ Gate: install/lint/typecheck/test/test:integration/build; tokens inválidos/expi
 
 Evidência de 2026-10-06: instalação congelada, lint, typecheck, test, test:integration e build passaram. **140 testes: 75 unitários, 10 HTTP com dependências controladas e 55 integrações com PostgreSQL/Redis reais**. Toda a cadeia de quatro migrations foi aplicada em banco novo; seed repetido preservou credenciais, IDs, timestamps e grants. Testes cobrem rotação/reuso concorrente, troca de senha versus login/refresh, revogação, IDOR, grants mistos, escopos, limites Redis e FKs/triggers de tenant. O banco local da fase 2 foi atualizado sem reset e recebeu seed duas vezes; pnpm dev validou frontend/CSS, API/Swagger, auth, worker/job e logs sem secrets. Não foram implementadas telas de login, envio de e-mail ou funcionalidades comerciais.
 
-## Fase 4 — Design system e layout
+## Fase 4 — Design system e layout (concluída)
 
 1. UI shadcn/Tailwind, tokens visuais, acessibilidade e componentes usados pelo primeiro fluxo.
-2. Layout autenticado, navegação, seleção de tenant/filial e estados loading/erro/vazio.
-3. Cliente REST tipado, TanStack Query com keys tenant+escopo, React Hook Form/Zod e fluxo de sessão single-flight.
+2. Layout autenticado, navegação, seleção de organização, filial principal somente leitura e estados loading/erro/vazio, conforme capacidades da API atual.
+3. Cliente REST tipado, React Hook Form/Zod e fluxo de sessão single-flight coordenado entre abas; TanStack Query entra com dados remotos interativos, sem duplicar auth.
 4. Limpeza de cache/requests ao trocar tenant e ocultação de ações conforme permissões.
 
-Gate: layout responsivo e acessível, sessão funciona, cache não vaza entre usuários/tenants; backend continua autorizando. Não criar telas vazias para todas as entradas do menu.
+Gate: layout responsivo e acessível, sessão funciona, dados não vazam entre usuários/tenants; backend continua autorizando. A solicitação explícita da fase 4 inclui páginas-base para todas as entradas do menu, com estrutura comum e sem funcionalidades/dados comerciais fictícios (ADR-013).
+
+Evidência de 2026-10-06: install congelado, lint, typecheck, test, test:integration e build passaram. **197 testes: 118 unitários (44 de frontend/DOM), 10 HTTP, 55 integrações PostgreSQL/Redis e 14 E2E Chromium**. Os 140 cenários anteriores foram preservados. Login/refresh/logout/revogação, navegação completa, troca ADMIN A → VIEWER B, concorrência entre abas, canal nativo sem autodelivery, dialogs/teclado, 404, fonte local carregada e axe passaram. Login, Dashboard, placeholders e demonstração técnica de Configurações foram verificados em 375/768/1024/1440/1920px, sem overflow global, erros de aplicação ou hydration. pnpm dev iniciou web/API/worker; health/Swagger, admin demo, refresh/logout e job técnico passaram. Artefatos públicos foram conferidos sem secrets do servidor. Nenhuma migration, funcionalidade comercial ou fase 5 foi implementada.
 
 ## Fase 5 — Clientes e empresas
 
@@ -161,4 +163,4 @@ Gate: evidência de restore e reconciliação, incidentes simulados, limites por
 | SLA, retenção, bases legais e HA                       | refinados ao longo das features, obrigatórios antes de produção              |
 | ERP não detalhado em requisitos                        | incremento separado, depois de contrato e processo comercial definidos       |
 
-A fase 1 materializa os bootstraps/configurações técnicas e registra evidências no README/relatório da tarefa. Seu encerramento exige os gates acima; a fase 2 é executada mediante sua solicitação explícita; a fase 3 exige nova autorização. Não antecipar módulos comerciais.
+Cada conclusão exige evidência dos gates acima. As fases 0–4 estão encerradas; a próxima implementação exige autorização explícita para a fase 5. Não antecipar módulos comerciais.

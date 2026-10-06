@@ -1,6 +1,6 @@
 # ADR-009 — Frontend por features e contratos independentes do banco
 
-Status: decisão inicial; implementação pendente. Data: 2026-10-06.
+Status: base implementada na fase 4; cache de dados e realtime permanecem planejados. Complementado pelo ADR-013. Data: 2026-10-06.
 
 ## Context
 
@@ -27,4 +27,4 @@ Socket só invalida/atualiza dados autorizados; refetch cobre perda e reconexão
 
 UI e features crescem incrementalmente; cache/SSR/scopes exigem testes explícitos. Schemas comuns cuidam de formato, não eliminam validação backend. packages/ui não contém clientes/opportunities nem chamadas HTTP.
 
-Nenhuma página, componente ou dependência foi criada nesta fase.
+Na fase 0, nenhuma página, componente ou dependência foi criada. A fase 4 materializa features de autenticação, cliente REST, UI e layout. Sua solicitação explícita autoriza páginas-base para todas as entradas do menu, conforme ADR-013; não há funcionalidade comercial. TanStack Query será introduzido com dados interativos, sem duplicar o proprietário da sessão. As regras de isolamento/limpeza de cache acima continuam obrigatórias nesse momento.

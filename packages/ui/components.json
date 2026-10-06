@@ -1,0 +1,21 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "new-york",
+  "rsc": true,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "src/tokens.css",
+    "baseColor": "neutral",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "aliases": {
+    "components": "@crm/ui",
+    "utils": "@crm/ui/utils",
+    "ui": "@crm/ui",
+    "lib": "@crm/ui",
+    "hooks": "@crm/ui"
+  },
+  "iconLibrary": "lucide"
+}

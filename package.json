@@ -23,24 +23,33 @@
     "db:seed": "dotenv -e .env -- turbo run build --filter=@crm/api && dotenv -e .env -- pnpm --filter @crm/database db:seed",
     "infra:up": "docker compose up -d --wait postgres redis",
     "infra:down": "docker compose down",
-    "queue:probe": "dotenv -e .env -- pnpm --filter @crm/api queue:probe"
+    "queue:probe": "dotenv -e .env -- pnpm --filter @crm/api queue:probe",
+    "test:e2e": "pnpm build && dotenv -e .env -- playwright test"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
     "@crm/config": "workspace:*",
+    "@crm/contracts": "workspace:*",
+    "@crm/database": "workspace:*",
     "@crm/eslint-config": "workspace:*",
     "@crm/typescript-config": "workspace:*",
+    "@playwright/test": "1.63.0",
     "@swc/core": "1.16.13",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.7",
     "@types/node": "24.19.1",
     "dotenv-cli": "11.0.0",
     "eslint": "10.12.0",
+    "ioredis": "6.0.0",
+    "jose": "6.2.12",
+    "jsdom": "30.1.2",
     "prettier": "3.9.9",
     "turbo": "2.11.7",
     "typescript": "6.0.3",
-    "vitest": "5.0.3",
     "vite": "8.3.2",
-    "@crm/database": "workspace:*",
-    "@crm/contracts": "workspace:*",
-    "jose": "6.2.12",
-    "ioredis": "6.0.0"
-  }
+    "vitest": "5.0.3",
+    "zod": "4.6.5"
+  },
+  "type": "module"
 }
