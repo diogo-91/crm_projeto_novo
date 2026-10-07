@@ -2,7 +2,7 @@
 
 ## 1. Estado e decisões
 
-O ERD abaixo é um modelo **conceitual futuro**, não uma ordem para gerar schema/migrations comerciais. A fase 1 criou InfrastructureMetadata. A fase 2 materializa exclusivamente Organization, Branch, User global, OrganizationMembership e MembershipBranch; consulte a seção de modelo físico atual, README e ADR-011. A fase 3 acrescenta credenciais, sessões e RBAC conforme a seção física ao final e ADR-012. O restante do ERD continua futuro. Campos e cardinalidades serão refinados por módulo; os limites de tenant e invariantes já são decisões obrigatórias. PostgreSQL com Prisma, schema compartilhado e `organization_id` em entidades tenant. Identidade `User` é global; empresa cliente `Company` é diferente de `Organization`.
+O ERD abaixo é um modelo **conceitual futuro**, não uma ordem para gerar schema/migrations comerciais. A fase 1 criou InfrastructureMetadata. A fase 2 materializa exclusivamente Organization, Branch, User global, OrganizationMembership e MembershipBranch; consulte a seção de modelo físico atual, README e ADR-011. A fase 3 acrescenta credenciais, sessões e RBAC conforme a seção física ao final e ADR-012. A fase 5 acrescenta Contact, Company, Tag, ContactTag e históricos mínimos de atribuição, conforme ADR-014 e a seção física abaixo. O restante do ERD continua futuro. Campos e cardinalidades serão refinados por módulo; os limites de tenant e invariantes já são decisões obrigatórias. PostgreSQL com Prisma, schema compartilhado e `organization_id` em entidades tenant. Identidade `User` é global; empresa cliente `Company` é diferente de `Organization`.
 
 UUID gerado pela aplicação/Prisma ou default PostgreSQL compatível com a versão escolhida. Começar com UUID v4; avaliar v7 apenas com suporte real e medição, sem substituir UUID por sequências públicas. Datas `timestamptz` em UTC; frontend converte para fuso da organização/usuário. Horários de automações/metas precisam armazenar também o fuso IANA usado na definição do período para lidar com mudanças de horário.
 
@@ -503,7 +503,7 @@ Pipeline e Quote precisam de pelo menos um estágio/item ao serem publicados/env
 
 ### Contatos, empresas, leads e oportunidades
 
-Contact pode ter uma Company principal opcional; associação a múltiplas empresas com papéis ficará para requisito concreto. E-mail/telefone não são unique globalmente nem por padrão: contatos podem compartilhar dados. Telefone normalizado com país quando conhecido; preservar entrada e origem. Deduplicação/merge são casos autorizados que mantêm histórico, não deletion automática.
+Contact pode ter uma Company principal opcional; associação a múltiplas empresas com papéis ficará para requisito concreto. E-mail comercial não é unique. A política inicial de telefone compartilhado foi refinada na fase 5 (ADR-014): Contact exige telefone normalizado único por tenant, sem inferir DDI; Company permite telefone compartilhado. Preservar apresentação e origem. Deduplicação/merge são casos autorizados que mantêm histórico, não deletion automática.
 
 Company pode ter documento fiscal normalizado; unique parcial por tenant para documentos válidos presentes conforme país/política. Não forçar regras brasileiras sobre todas as organizações. Dados e endereço do comprador em quote são snapshots, independentes de futura alteração do contato.
 
@@ -676,3 +676,100 @@ Sessão por login/dispositivo, refresh consume e successor sob lock de Session, 
 Seed movido para bootstrap da API, pois hash/roles são responsabilidade dos módulos backend. Prisma config invoca esse bootstrap; packages/database não ganhou domínio. Seed pede SEED_ADMIN_PASSWORD, recusa produção e não redefine hash já existente. Upserts preservam IDs, timestamps e desativações; templates/grants não duplicam. Rotação da senha demo existente utiliza change-password, não a repetição do seed. Retenção/limpeza periódica de sessões expiradas será definida por operação/LGPD quando houver uso real; não remover histórico de refresh de sessões ainda válidas.
 
 A migration incremental `20261006190000_enforce_grant_branch_reparenting` reforça o constraint trigger para verificar tanto o grant antigo quanto o novo em UPDATE de UserRoleBranch. A primeira migration de auth já havia sido testada; permaneceu imutável. O teste de realocação direta confirma rollback se o grant antigo perder sua filial obrigatória.
+
+## Modelo físico comercial — fase 5
+
+Migrations incrementais `20261007120000_create_contacts_companies_tags` e `20261007123000_create_assignment_history`; as quatro migrations anteriores permanecem imutáveis. Este é o modelo implementado, distinto das entidades futuras do ERD conceitual.
+
+```mermaid
+erDiagram
+    Organization ||--o{ Branch : possui
+    Organization ||--o{ OrganizationMembership : possui
+    User ||--o{ OrganizationMembership : participa
+    OrganizationMembership ||--o{ MembershipBranch : acessa
+    Branch ||--o{ MembershipBranch : vincula
+    MembershipBranch ||--o{ Contact : atribui_carteira_e_filial
+    MembershipBranch ||--o{ Company : atribui_carteira_e_filial
+    Organization ||--o{ Contact : isola
+    Organization ||--o{ Company : isola
+    Organization ||--o{ Tag : possui
+    Company o|--o{ Contact : empresa_principal
+    Contact ||--o{ ContactTag : classifica
+    Tag ||--o{ ContactTag : identifica
+    Contact ||--o{ ContactAssignmentHistory : preserva_transferencias
+    Company ||--o{ CompanyAssignmentHistory : preserva_transferencias
+    OrganizationMembership ||--o{ ContactAssignmentHistory : origem_destino_ator
+    OrganizationMembership ||--o{ CompanyAssignmentHistory : origem_destino_ator
+    Branch ||--o{ ContactAssignmentHistory : filial_origem_destino
+    Branch ||--o{ CompanyAssignmentHistory : filial_origem_destino
+    Contact {
+        uuid id PK
+        uuid organizationId FK
+        uuid branchId FK
+        uuid ownerMembershipId FK
+        uuid companyId FK
+        string normalizedPhone
+        string normalizedDocument
+        int version
+        boolean active
+    }
+    Company {
+        uuid id PK
+        uuid organizationId FK
+        uuid branchId FK
+        uuid ownerMembershipId FK
+        string normalizedDocument
+        int version
+        boolean active
+    }
+    Tag {
+        uuid id PK
+        uuid organizationId FK
+        string normalizedName
+        string variant
+        int version
+        boolean active
+    }
+    ContactTag {
+        uuid organizationId PK,FK
+        uuid contactId PK,FK
+        uuid tagId PK,FK
+    }
+```
+
+### Integridade e política de dados
+
+Contact/Company exigem organizationId, branchId, ownerMembershipId e autores de criação/alteração. FK `(organization_id, owner_membership_id, branch_id)` → MembershipBranch impede owner de outra organização ou sem vínculo na filial; FK `(organization_id, branch_id)` → Branch protege filial tenant. `(organization_id, company_id)` → Company protege associação opcional; ContactTag liga tenant+contact e tenant+tag, com chave composta que impede duplicação. Autores e origem/destino/ator de históricos referenciam OrganizationMembership e Branch pelo mesmo tenant. Todas essas relações usam RESTRICT; não reparentear por alteração de organization_id.
+
+Contact.phone é obrigatório, Company.phone opcional. As apresentações são armazenadas separadas das chaves normalizadas. Normalização remove espaços/ponto/parênteses/hífen e preserva `+` explícito; 7–15 dígitos, sem inferir país/DDI. Telefone local e internacional explícito podem ter chaves diferentes, pois não existe informação para resolver essa ambiguidade. Contact tem unique `(organization_id, normalized_phone)` **inclusive inativos**; Company não tem unique de telefone. E-mail comercial canônico trim/lowercase não é único. User.email continua globalmente único, sem qualquer alteração na identidade.
+
+Documentos presentes têm chave maiúscula alfanumérica (remove espaços/ponto/barra/hífen), unique `(organization_id, normalized_document)` em Contact e Company separadamente. NULL pode ocorrer em vários registros. É um identificador opaco do cadastro, sem CPF/CNPJ, jurisdição ou validação fiscal. Documento igual em tipos/organizações distintos é permitido. A política de Organization.document da fase 2 permanece sem unicidade fiscal. Tag.normalizedName é lowercase, trim e espaços colapsados, unique dentro do tenant. Seis variantes semânticas permitidas, sem classes CSS fornecidas pelo cliente.
+
+CHECKs reforçam canonicalidade das chaves, e-mail, variantes e versão positiva; históricos exigem versão maior que 1. Não substituir migrations por `db push`, que perderia controles SQL. Constraints não autorizam leituras: tenant+scope deve continuar em WHERE e na autorização de associações, inclusive filtros/joins. Campo nullable não concede acesso organizacional.
+
+Contact tem source enum MANUAL/WHATSAPP/MARKETPLACE/WEBSITE/REFERRAL/OUTBOUND/PHONE/IMPORT/OTHER. Representa procedência informada, sem integração WhatsApp ou importador. Notes é texto simples, máximo 4000; frontend não renderiza HTML. active permite desativação sem deletedAt universal. Version e updateMany condicionado previnem lost updates; 409 não remove relações nem gera histórico de alteração falhada.
+
+Transferência de filial/owner grava histórico mínimo na mesma transação. Histórico referencia memberships antigos, não o vínculo MembershipBranch removível, conservando origem/destino. Não é AuditLog completo nem timeline. Criação/edição mantêm IDs de autores e UTC, sem dados pessoais adicionais no log.
+
+### Índices e consultas atuais
+
+| Índice/constraint                                        | Justificativa                                               |
+| -------------------------------------------------------- | ----------------------------------------------------------- |
+| tenant+id (Contact/Company/Tag)                          | alvo de FKs compostas e lookup tenant                       |
+| tenant+normalizedPhone (Contact)                         | dedupe concorrente por telefone                             |
+| tenant+normalizedDocument (Contact/Company)              | dedupe e filtro exato de documento presente                 |
+| tenant+normalizedName (Tag)                              | dedupe de nome canônico                                     |
+| tenant+branch+id (Contact/Company)                       | seleção de filial/grants e joins                            |
+| tenant+ownerMembership+id (Contact/Company)              | carteira OWN e filtro de responsável                        |
+| tenant+createdAt+id, tenant+updatedAt+id, tenant+name+id | ordenações keyset permitidas com desempate                  |
+| tenant+company+id (Contact)                              | clientes relacionados a empresa, ainda filtrados pelo scope |
+| PK tenant+contact+tag e índice tenant+tag+contact        | associação idempotente e filtro por tag                     |
+| tenant+record+recordVersion (históricos)                 | unicidade por mudança e leitura de histórico do registro    |
+
+Não adicionar índice tenant-only: os prefixos acima atendem esse uso. Substring case-insensitive usa filtros tenant mas B-tree não acelera `%termo%`; novos índices de texto exigem medição. O teste de desempenho cria 2000 contatos sintéticos, executa ANALYZE/EXPLAIN ANALYZE BUFFERS e verifica uso de `contacts_organization_id_created_at_id_idx` na ordenação padrão. Não promete um tempo universal para qualquer filtro/volume.
+
+API seleciona só colunas necessárias, busca limit+1 e pagina depois de filtrar tenant/scope. Rótulos de owners/branches/companies/tags são carregados em lotes: número de queries não cresce uma por linha. Company vinculada fora de companies.read fica oculta. Não há count global, exportação sem limite ou query de todos os usuários no frontend.
+
+### Seed e evolução
+
+Seed principal mantém demo estrutural, senha existente e grants idempotentes, amplia catálogo para 20 permissões (oito estruturais e doze comerciais) e atualiza seis templates **na demo**. Não cria clientes, empresas ou tags fictícios e não concede permissões a todos os tenants existentes. Templates de organizações novas incluem o catálogo comercial. Fixtures sintéticas de CRUD/volume são exclusivas dos bancos isolados de integração/E2E. Nenhuma nova variável de ambiente ou serviço foi necessária.

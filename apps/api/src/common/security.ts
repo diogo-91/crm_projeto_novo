@@ -17,7 +17,7 @@ export const IDENTITY = Symbol('identity');
 export const PERMISSION = Symbol('permission');
 export type Requirement = {
   permission: PermissionCode;
-  target: 'organization' | 'collection' | 'platform';
+  target: 'organization' | 'collection' | 'platform' | 'tenant';
 };
 export const PublicEndpoint = () => SetMetadata(PUBLIC, true);
 export const IdentityEndpoint = () => SetMetadata(IDENTITY, true);

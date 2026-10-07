@@ -74,7 +74,7 @@ export function ErrorState({
       {...(retry
         ? {
             action: (
-              <Button variant="outline" onClick={retry}>
+              <Button type="button" variant="outline" onClick={retry}>
                 Tentar novamente
               </Button>
             ),

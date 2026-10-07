@@ -26,6 +26,9 @@ model Organization {
   active      Boolean                  @default(true)
   createdAt   DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  contacts    Contact[]
+  companies   Company[]
+  tags        Tag[]
   roles       Role[]
   branches    Branch[]
   memberships OrganizationMembership[]
@@ -34,15 +37,21 @@ model Organization {
 }
 
 model Branch {
-  id             String             @id @default(uuid()) @db.Uuid
-  organizationId String             @map("organization_id") @db.Uuid
-  name           String             @db.VarChar(160)
-  code           String             @db.VarChar(64)
-  active         Boolean            @default(true)
-  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
-  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  memberships    MembershipBranch[]
+  companyHistoryBranchTo   CompanyAssignmentHistory[] @relation("CompanyHistoryBranchTo")
+  companyHistoryBranchFrom CompanyAssignmentHistory[] @relation("CompanyHistoryBranchFrom")
+  contactHistoryBranchTo   ContactAssignmentHistory[] @relation("ContactHistoryBranchTo")
+  contactHistoryBranchFrom ContactAssignmentHistory[] @relation("ContactHistoryBranchFrom")
+  id                       String                     @id @default(uuid()) @db.Uuid
+  organizationId           String                     @map("organization_id") @db.Uuid
+  name                     String                     @db.VarChar(160)
+  code                     String                     @db.VarChar(64)
+  active                   Boolean                    @default(true)
+  createdAt                DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization             Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  contacts                 Contact[]
+  companies                Company[]
+  memberships              MembershipBranch[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, code])
@@ -66,19 +75,29 @@ model User {
 }
 
 model OrganizationMembership {
-  id              String             @id @default(uuid()) @db.Uuid
-  organizationId  String             @map("organization_id") @db.Uuid
-  userId          String             @map("user_id") @db.Uuid
-  primaryBranchId String?            @map("primary_branch_id") @db.Uuid
-  active          Boolean            @default(true)
-  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
-  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  user            User               @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  branches        MembershipBranch[] @relation("MembershipBranches")
-  userRoles       UserRole[]
-  sessions        Session[]
-  primaryBranch   MembershipBranch?  @relation("PrimaryBranch", fields: [organizationId, id, primaryBranchId], references: [organizationId, membershipId, branchId], onDelete: Restrict, onUpdate: Restrict)
+  companyHistoryActor     CompanyAssignmentHistory[] @relation("CompanyHistoryActor")
+  companyHistoryOwnerTo   CompanyAssignmentHistory[] @relation("CompanyHistoryOwnerTo")
+  companyHistoryOwnerFrom CompanyAssignmentHistory[] @relation("CompanyHistoryOwnerFrom")
+  contactHistoryActor     ContactAssignmentHistory[] @relation("ContactHistoryActor")
+  contactHistoryOwnerTo   ContactAssignmentHistory[] @relation("ContactHistoryOwnerTo")
+  contactHistoryOwnerFrom ContactAssignmentHistory[] @relation("ContactHistoryOwnerFrom")
+  id                      String                     @id @default(uuid()) @db.Uuid
+  organizationId          String                     @map("organization_id") @db.Uuid
+  userId                  String                     @map("user_id") @db.Uuid
+  primaryBranchId         String?                    @map("primary_branch_id") @db.Uuid
+  active                  Boolean                    @default(true)
+  createdAt               DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization            Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user                    User                       @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  branches                MembershipBranch[]         @relation("MembershipBranches")
+  userRoles               UserRole[]
+  sessions                Session[]
+  createdContacts         Contact[]                  @relation("ContactCreator")
+  updatedContacts         Contact[]                  @relation("ContactUpdater")
+  createdCompanies        Company[]                  @relation("CompanyCreator")
+  updatedCompanies        Company[]                  @relation("CompanyUpdater")
+  primaryBranch           MembershipBranch?          @relation("PrimaryBranch", fields: [organizationId, id, primaryBranchId], references: [organizationId, membershipId, branchId], onDelete: Restrict, onUpdate: Restrict)
 
   @@unique([organizationId, id])
   @@unique([organizationId, userId])
@@ -96,6 +115,8 @@ model MembershipBranch {
   updatedAt      DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
   membership     OrganizationMembership   @relation("MembershipBranches", fields: [organizationId, membershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
   branch         Branch                   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  ownedContacts  Contact[]
+  ownedCompanies Company[]
   roleBranches   UserRoleBranch[]
   primaryFor     OrganizationMembership[] @relation("PrimaryBranch")
 
@@ -242,4 +263,168 @@ model RefreshToken {
 
   @@unique([sessionId, id])
   @@map("refresh_tokens")
+}
+
+model Company {
+  assignmentHistory     CompanyAssignmentHistory[]
+  id                    String                     @id @default(uuid()) @db.Uuid
+  organizationId        String                     @map("organization_id") @db.Uuid
+  branchId              String                     @map("branch_id") @db.Uuid
+  ownerMembershipId     String                     @map("owner_membership_id") @db.Uuid
+  name                  String                     @db.VarChar(160)
+  phone                 String?                    @db.VarChar(64)
+  normalizedPhone       String?                    @map("normalized_phone") @db.VarChar(32)
+  email                 String?                    @db.VarChar(254)
+  document              String?                    @db.VarChar(64)
+  normalizedDocument    String?                    @map("normalized_document") @db.VarChar(64)
+  notes                 String?                    @db.VarChar(4000)
+  active                Boolean                    @default(true)
+  version               Int                        @default(1)
+  createdByMembershipId String                     @map("created_by_membership_id") @db.Uuid
+  updatedByMembershipId String                     @map("updated_by_membership_id") @db.Uuid
+  createdAt             DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization          Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  branch                Branch                     @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  owner                 MembershipBranch           @relation(fields: [organizationId, ownerMembershipId, branchId], references: [organizationId, membershipId, branchId], onDelete: Restrict, onUpdate: Restrict)
+  creator               OrganizationMembership     @relation("CompanyCreator", fields: [organizationId, createdByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  updater               OrganizationMembership     @relation("CompanyUpdater", fields: [organizationId, updatedByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  legalName             String?                    @map("legal_name") @db.VarChar(200)
+  contacts              Contact[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, normalizedDocument])
+  @@index([organizationId, branchId, id])
+  @@index([organizationId, ownerMembershipId, id])
+  @@index([organizationId, createdAt, id])
+  @@index([organizationId, updatedAt, id])
+  @@index([organizationId, name, id])
+  @@map("companies")
+}
+
+model Contact {
+  assignmentHistory     ContactAssignmentHistory[]
+  id                    String                     @id @default(uuid()) @db.Uuid
+  organizationId        String                     @map("organization_id") @db.Uuid
+  branchId              String                     @map("branch_id") @db.Uuid
+  ownerMembershipId     String                     @map("owner_membership_id") @db.Uuid
+  name                  String                     @db.VarChar(160)
+  phone                 String                     @db.VarChar(64)
+  normalizedPhone       String                     @map("normalized_phone") @db.VarChar(32)
+  email                 String?                    @db.VarChar(254)
+  document              String?                    @db.VarChar(64)
+  normalizedDocument    String?                    @map("normalized_document") @db.VarChar(64)
+  notes                 String?                    @db.VarChar(4000)
+  active                Boolean                    @default(true)
+  version               Int                        @default(1)
+  createdByMembershipId String                     @map("created_by_membership_id") @db.Uuid
+  updatedByMembershipId String                     @map("updated_by_membership_id") @db.Uuid
+  createdAt             DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization          Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  branch                Branch                     @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  owner                 MembershipBranch           @relation(fields: [organizationId, ownerMembershipId, branchId], references: [organizationId, membershipId, branchId], onDelete: Restrict, onUpdate: Restrict)
+  creator               OrganizationMembership     @relation("ContactCreator", fields: [organizationId, createdByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  updater               OrganizationMembership     @relation("ContactUpdater", fields: [organizationId, updatedByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  companyId             String?                    @map("company_id") @db.Uuid
+  company               Company?                   @relation(fields: [organizationId, companyId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  source                ContactSource              @default(MANUAL)
+  tags                  ContactTag[]
+
+  @@unique([organizationId, normalizedPhone])
+  @@unique([organizationId, id])
+  @@unique([organizationId, normalizedDocument])
+  @@index([organizationId, companyId, id])
+  @@index([organizationId, branchId, id])
+  @@index([organizationId, ownerMembershipId, id])
+  @@index([organizationId, createdAt, id])
+  @@index([organizationId, updatedAt, id])
+  @@index([organizationId, name, id])
+  @@map("contacts")
+}
+
+enum ContactSource {
+  MANUAL
+  WHATSAPP
+  MARKETPLACE
+  WEBSITE
+  REFERRAL
+  OUTBOUND
+  PHONE
+  IMPORT
+  OTHER
+}
+
+model Tag {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  name           String       @db.VarChar(80)
+  normalizedName String       @map("normalized_name") @db.VarChar(80)
+  variant        String       @default("neutral") @db.VarChar(16)
+  active         Boolean      @default(true)
+  version        Int          @default(1)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  contacts       ContactTag[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, normalizedName])
+  @@map("tags")
+}
+
+model ContactTag {
+  organizationId String  @map("organization_id") @db.Uuid
+  contactId      String  @map("contact_id") @db.Uuid
+  tagId          String  @map("tag_id") @db.Uuid
+  contact        Contact @relation(fields: [organizationId, contactId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  tag            Tag     @relation(fields: [organizationId, tagId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([organizationId, contactId, tagId])
+  @@index([organizationId, tagId, contactId])
+  @@map("contact_tags")
+}
+
+model ContactAssignmentHistory {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  organizationId        String                 @map("organization_id") @db.Uuid
+  contactId             String                 @map("contact_id") @db.Uuid
+  fromBranchId          String                 @map("from_branch_id") @db.Uuid
+  toBranchId            String                 @map("to_branch_id") @db.Uuid
+  fromOwnerMembershipId String                 @map("from_owner_membership_id") @db.Uuid
+  toOwnerMembershipId   String                 @map("to_owner_membership_id") @db.Uuid
+  actorMembershipId     String                 @map("actor_membership_id") @db.Uuid
+  recordVersion         Int                    @map("record_version")
+  occurredAt            DateTime               @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  contact               Contact                @relation(fields: [organizationId, contactId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  branchFrom            Branch                 @relation("ContactHistoryBranchFrom", fields: [organizationId, fromBranchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  branchTo              Branch                 @relation("ContactHistoryBranchTo", fields: [organizationId, toBranchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  ownerFrom             OrganizationMembership @relation("ContactHistoryOwnerFrom", fields: [organizationId, fromOwnerMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  ownerTo               OrganizationMembership @relation("ContactHistoryOwnerTo", fields: [organizationId, toOwnerMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  actor                 OrganizationMembership @relation("ContactHistoryActor", fields: [organizationId, actorMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, contactId, recordVersion])
+  @@map("contact_assignment_history")
+}
+
+model CompanyAssignmentHistory {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  organizationId        String                 @map("organization_id") @db.Uuid
+  companyId             String                 @map("company_id") @db.Uuid
+  fromBranchId          String                 @map("from_branch_id") @db.Uuid
+  toBranchId            String                 @map("to_branch_id") @db.Uuid
+  fromOwnerMembershipId String                 @map("from_owner_membership_id") @db.Uuid
+  toOwnerMembershipId   String                 @map("to_owner_membership_id") @db.Uuid
+  actorMembershipId     String                 @map("actor_membership_id") @db.Uuid
+  recordVersion         Int                    @map("record_version")
+  occurredAt            DateTime               @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  company               Company                @relation(fields: [organizationId, companyId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  branchFrom            Branch                 @relation("CompanyHistoryBranchFrom", fields: [organizationId, fromBranchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  branchTo              Branch                 @relation("CompanyHistoryBranchTo", fields: [organizationId, toBranchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  ownerFrom             OrganizationMembership @relation("CompanyHistoryOwnerFrom", fields: [organizationId, fromOwnerMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  ownerTo               OrganizationMembership @relation("CompanyHistoryOwnerTo", fields: [organizationId, toOwnerMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  actor                 OrganizationMembership @relation("CompanyHistoryActor", fields: [organizationId, actorMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, companyId, recordVersion])
+  @@map("company_assignment_history")
 }

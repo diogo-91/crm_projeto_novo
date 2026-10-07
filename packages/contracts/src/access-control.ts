@@ -9,6 +9,18 @@ export const permissionCodes = [
   'users.read',
   'users.manage',
   'roles.read',
+  'contacts.read',
+  'contacts.create',
+  'contacts.update',
+  'contacts.delete',
+  'contacts.assign',
+  'companies.read',
+  'companies.create',
+  'companies.update',
+  'companies.delete',
+  'companies.assign',
+  'tags.read',
+  'tags.manage',
 ] as const;
 export const permissionCodeSchema = z.enum(permissionCodes);
 export type PermissionCode = z.infer<typeof permissionCodeSchema>;

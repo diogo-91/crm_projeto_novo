@@ -1,3 +1,4 @@
+import { authorizationCacheKey } from '../infrastructure/authorization-cache-key.js';
 import { Inject, Injectable } from '@nestjs/common';
 import type { ApiConfig } from '@crm/config/server';
 import type { Login, ChangePassword, MeResponse, AuthResponse } from '@crm/contracts';
@@ -73,6 +74,7 @@ export class AuthService {
             membershipId: context.membershipId,
             primaryBranchId: context.primaryBranchId,
             branches: context.branches,
+            cacheScopeKey: authorizationCacheKey(context),
             permissions: [...new Set(context.grants.flatMap((grant) => grant.permissions))],
             roles: context.grants.map((grant) => ({
               id: grant.roleId,

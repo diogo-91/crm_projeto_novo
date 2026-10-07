@@ -1,3 +1,5 @@
+import { CommercialDirectoryGateway } from './infrastructure/commercial-directory.gateway.js';
+import { UsersModule } from '../users/index.js';
 import { Inject, Injectable, Module } from '@nestjs/common';
 import type { DatabaseTransaction } from '@crm/database';
 import { DatabaseModule, DatabaseService } from '../database/database.module.js';
@@ -93,8 +95,8 @@ export class OrganizationsAccessGateway {
   }
 }
 @Module({
-  imports: [DatabaseModule],
-  providers: [OrganizationsAccessGateway],
-  exports: [OrganizationsAccessGateway],
+  imports: [DatabaseModule, UsersModule],
+  providers: [OrganizationsAccessGateway, CommercialDirectoryGateway],
+  exports: [OrganizationsAccessGateway, CommercialDirectoryGateway],
 })
 export class OrganizationsContextModule {}

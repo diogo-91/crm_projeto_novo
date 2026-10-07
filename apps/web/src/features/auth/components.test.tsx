@@ -36,6 +36,7 @@ const response = {
     primaryBranchId: null,
     branches: [],
     roles: [],
+    cacheScopeKey: 'a'.repeat(64),
     permissions: ['users.read'],
   },
 };

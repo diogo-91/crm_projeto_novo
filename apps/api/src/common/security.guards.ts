@@ -83,6 +83,12 @@ export class AuthorizationGuard implements CanActivate {
       await this.access.platform(request.principal, requirement.permission);
       return true;
     }
+    if (requirement.target === 'tenant') {
+      const tenant = await this.access.context(request.principal);
+      collectionScope(tenant, requirement.permission);
+      request.tenant = tenant;
+      return true;
+    }
     const id = uuidSchema.safeParse(request.params['organizationId'] ?? request.params['id']);
     if (!id.success)
       throw new ApplicationError('INVALID_INPUT', 'Valid organization UUID required.');

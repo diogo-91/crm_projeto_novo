@@ -2,7 +2,7 @@
 
 ## Como executar
 
-Cada fase deve ser dividida em PRs pequenos, com contrato, implementação autorizada, testes e documentação. Este roadmap **não autoriza execução das próximas fases**. As fases 0, 1, 2, 3 e 4 estão concluídas; a fase 5 exige nova solicitação. Não gerar todos os módulos/arquivos de uma vez. Decisões só ganham infraestrutura quando um consumidor real precisar.
+Cada fase deve ser dividida em PRs pequenos, com contrato, implementação autorizada, testes e documentação. Este roadmap **não autoriza execução das próximas fases**. As fases 0–5 estão concluídas. A fase 6 exige nova solicitação. Não gerar todos os módulos/arquivos de uma vez. Decisões só ganham infraestrutura quando um consumidor real precisar.
 
 Definition of Done de uma feature: critérios de negócio claros; isolamento organização/filial/carteira; autorização granular; validação e erros; contrato OpenAPI; migration revisada quando existir; testes críticos; logs sem secrets; UI acessível quando pertinente. Falhas conhecidas e testes não executados são explícitos. Nenhuma fase é concluída apenas por scaffold/build.
 
@@ -61,13 +61,15 @@ Gate: layout responsivo e acessível, sessão funciona, dados não vazam entre u
 
 Evidência de 2026-10-06: install congelado, lint, typecheck, test, test:integration e build passaram. **197 testes: 118 unitários (44 de frontend/DOM), 10 HTTP, 55 integrações PostgreSQL/Redis e 14 E2E Chromium**. Os 140 cenários anteriores foram preservados. Login/refresh/logout/revogação, navegação completa, troca ADMIN A → VIEWER B, concorrência entre abas, canal nativo sem autodelivery, dialogs/teclado, 404, fonte local carregada e axe passaram. Login, Dashboard, placeholders e demonstração técnica de Configurações foram verificados em 375/768/1024/1440/1920px, sem overflow global, erros de aplicação ou hydration. pnpm dev iniciou web/API/worker; health/Swagger, admin demo, refresh/logout e job técnico passaram. Artefatos públicos foram conferidos sem secrets do servidor. Nenhuma migration, funcionalidade comercial ou fase 5 foi implementada.
 
-## Fase 5 — Clientes e empresas
+## Fase 5 — Clientes e empresas (concluída)
 
-1. Contact/Company e vínculos, CRUD autorizado e arquivamento; estratégia de normalização sem unique indevido de telefone/e-mail.
+1. Contact/Company e vínculos, CRUD autorizado e desativação; telefone de Contact único por tenant sem DDI inferido (ADR-014), e-mail comercial não único.
 2. Carteira/filial e transferência auditada, busca paginada e filtros indexados.
-3. Formulários/lista/detalhe funcionais com erros e validação backend; dados sintéticos.
+3. Tag/ContactTag e gestão organizacional; formulários/lista/detalhe reais com erros e validação backend. Seed sem dados comerciais; fixtures sintéticas isoladas.
 
 Gate: criação/leitura/alteração/arquivamento e isolamento API/web cobertos; joins Company/Contact não atravessam tenants; plano de consulta avaliado com volume representativo.
+
+Evidência de 2026-10-07: instalação congelada, lint, typecheck, test, test:integration, build e test:e2e passaram. **270 testes: 161 unitários (incluem 58 frontend/DOM), 10 HTTP, 79 integrações PostgreSQL/Redis e 20 E2E Chromium**. Os 197 testes anteriores foram preservados. Seis migrations aplicadas em PostgreSQL limpo e seed repetido; FKs cruzadas, constraints/corridas, quatro scopes para Contact e Company, versionamento, rollback, histórico de transferência e invalidação de cache cobertos. Plano de consulta avaliado com 2000 registros sintéticos; projeções batched sem N+1. Jornada comercial real, cinco larguras, axe, foco, console e troca de contexto passaram. Banco local anterior recebeu duas migrations incrementais e seed repetido, sem clientes/empresas/tags fictícios. pnpm dev iniciou web/API/worker: health/Swagger, login/logout, páginas/listas autenticadas e job técnico passaram. Artefatos públicos e logs conferidos sem secrets do servidor. ADR-014 documenta as decisões. Nenhuma funcionalidade da fase 6 implementada.
 
 ## Fase 6 — Leads e pipeline
 
@@ -163,4 +165,4 @@ Gate: evidência de restore e reconciliação, incidentes simulados, limites por
 | SLA, retenção, bases legais e HA                       | refinados ao longo das features, obrigatórios antes de produção              |
 | ERP não detalhado em requisitos                        | incremento separado, depois de contrato e processo comercial definidos       |
 
-Cada conclusão exige evidência dos gates acima. As fases 0–4 estão encerradas; a próxima implementação exige autorização explícita para a fase 5. Não antecipar módulos comerciais.
+Cada conclusão exige evidência dos gates acima. As fases 0–5 estão encerradas. A fase 6 exige autorização explícita. Não antecipar os demais módulos comerciais.

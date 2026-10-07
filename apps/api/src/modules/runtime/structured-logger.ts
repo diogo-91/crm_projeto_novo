@@ -1,3 +1,4 @@
+import { requestMetadata } from '../../common/request-metadata.js';
 import pino from 'pino';
 import type { DestinationStream, Level, Logger } from 'pino';
 import type { LoggerService } from '@nestjs/common';
@@ -49,7 +50,7 @@ export class StructuredLogger implements LoggerService {
     return value.replace(/postgres(?:ql)?:\/\/\S+/gi, '[REDACTED_DATABASE_URL]');
   }
   info(message: string, context: string, fields: LogFields = {}): void {
-    this.logger.info({ context, ...fields }, this.message(message));
+    this.logger.info({ context, ...requestMetadata.getStore(), ...fields }, this.message(message));
   }
   warn(message: unknown, context = 'runtime'): void {
     this.logger.warn({ context }, this.message(message));

@@ -1,35 +1,8 @@
-import { readFile } from 'node:fs/promises';
+import { fixture, login } from './support.js';
 import { test, expect } from '@playwright/test';
-import type { Page } from '@playwright/test';
 import { AxeBuilder } from '@axe-core/playwright';
-import { z } from 'zod';
 import { authResponseSchema } from '@crm/contracts';
 import { createDatabaseClient } from '@crm/database';
-const fixtureSchema = z.object({
-  email: z.email(),
-  password: z.string(),
-  databaseUrl: z.string(),
-  firstOrganizationId: z.uuid(),
-  secondOrganizationId: z.uuid(),
-});
-async function fixture() {
-  return fixtureSchema.parse(
-    JSON.parse(await readFile('.runtime/browser-fixture.json', 'utf8')) as unknown,
-  );
-}
-async function login(page: Page) {
-  const data = await fixture();
-  await page.goto('/login');
-  await expect(page.getByRole('button', { name: 'Entrar no seu espaço' })).toBeEnabled();
-  await page.getByRole('textbox', { name: 'E-mail' }).fill(data.email);
-  await page.getByLabel(/^Senha/).fill(data.password);
-  await page.getByRole('button', { name: 'Entrar no seu espaço' }).click();
-  await expect(page.getByRole('heading', { name: 'Seu espaço de trabalho' })).toBeVisible();
-  await page
-    .getByRole('combobox', { name: 'Organização atual' })
-    .selectOption(data.firstOrganizationId);
-  await expect(page.getByRole('heading', { name: 'Seu trabalho, em perspectiva.' })).toBeVisible();
-}
 test('redirects guest protected routes and renders a safe 404', async ({ page }) => {
   await page.goto('/contacts');
   await expect(page).toHaveURL(/\/login$/);

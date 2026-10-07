@@ -21,8 +21,9 @@ export class AccessControlService {
     transaction: DatabaseTransaction,
     context: TenantContext,
     permission: PermissionCode,
+    kind: 'organization' | 'collection' = 'organization',
   ) {
-    return this.repository.lockAndAuthorize(transaction, context, permission);
+    return this.repository.lockAndAuthorize(transaction, context, permission, kind);
   }
   listRoles(context: TenantContext) {
     return this.repository.listRoles(context);

@@ -1,6 +1,6 @@
-# CRM — fundação, organizações, autenticação e RBAC
+# CRM — fundação, autenticação e cadastros comerciais
 
-Monorepo pnpm/Turborepo com web Next.js, API NestJS e worker Nest Application Context. A fase 2 acrescenta Organization, Branch, User global e memberships à infraestrutura existente. A fase 3 implementa autenticação e RBAC; todos os endpoints administrativos exigem sessão e autorização. O frontend mantém sua página técnica, sem login ou funcionalidades comerciais. ADR-012 encerra a exceção de API aberta do ADR-011. Leia AGENTS.md e os documentos de arquitetura antes de contribuir.
+Monorepo pnpm/Turborepo com web Next.js, API NestJS e worker Nest Application Context. A fase 2 acrescenta Organization, Branch, User global e memberships à infraestrutura existente. A fase 3 implementa autenticação e RBAC; todos os endpoints administrativos exigem sessão e autorização. A fase 4 implementa sessão web/layout/design system; a fase 5 adiciona clientes, empresas e tags funcionais. ADR-012 encerra a exceção de API aberta do ADR-011. Leia AGENTS.md e os documentos de arquitetura antes de contribuir.
 
 ## Requisitos
 
@@ -34,15 +34,15 @@ PostgreSQL e Redis rodam em Docker; web/API/worker rodam diretamente por pnpm, c
 
 | Recurso                      | Endereço padrão                         |
 | ---------------------------- | --------------------------------------- |
-| Página técnica               | http://localhost:3000                   |
-| API estrutural local         | http://localhost:3001/api/v1            |
+| Aplicação web                | http://localhost:3000                   |
+| API REST                     | http://localhost:3001/api/v1            |
 | Resumo técnico               | http://localhost:3001/health            |
 | Liveness                     | http://localhost:3001/health/live       |
 | Readiness PostgreSQL + Redis | http://localhost:3001/health/ready      |
 | Swagger UI                   | http://localhost:3001/docs              |
 | OpenAPI JSON                 | http://localhost:3001/docs/openapi.json |
 
-Estes endereços são instruções para executar o projeto **localmente**, não previews publicados do ambiente em nuvem. A página web tem apenas “CRM / Sistema em configuração.”. Não cria requests simuladas nem mostra funcionalidades inexistentes.
+Estes endereços são instruções para executar o projeto **localmente**, não previews publicados do ambiente em nuvem. A aplicação possui login e cadastros de clientes, empresas e tags. Outros módulos mantêm páginas-base claramente identificadas, sem métricas ou dados comerciais fictícios.
 
 ## Configuração
 
@@ -186,7 +186,7 @@ Variáveis novas (validadas apenas onde necessárias):
 
 Para um clone novo, pnpm env:init gera secrets privados e aleatórios. Para instalação existente, preencha as novas variáveis em .env sem mudar as senhas PostgreSQL/Redis já usadas pelos volumes. Secrets da API não são exigidos nem enviados ao worker. Argon2id 0.45.1 e JOSE 6.2.12 são compatíveis com Node 24; não há adaptador JWT concorrente, pacote cookie-parser ou fornecedor de e-mail antecipado. pnpm allowBuilds autoriza o addon oficial Argon2.
 
-Seed não redefine senha existente nem duplica roles/permissões/grants. Para trocar senha use o endpoint autenticado; senha demo só existe em desenvolvimento/testes e seed recusa production. Templates tenant: ADMIN, DIRECTOR, SALES_MANAGER, SELLER, AFTER_SALES, VIEWER. Catálogo de oito permissões implementadas; nenhuma permissão comercial fictícia. Não existe SUPER_ADMIN global. Para validar criação de novas organizações localmente, habilite SEED_PLATFORM_PROVISIONING=true antes do seed; não transforma ADMIN em administrador de outros tenants.
+Seed não redefine senha existente nem duplica roles/permissões/grants. Para trocar senha use o endpoint autenticado; senha demo só existe em desenvolvimento/testes e seed recusa production. Templates tenant: ADMIN, DIRECTOR, SALES_MANAGER, SELLER, AFTER_SALES, VIEWER. Catálogo atual de 20 permissões implementadas: oito estruturais e doze comerciais (fase 5). Não existe SUPER_ADMIN global. Para validar criação de novas organizações localmente, habilite SEED_PLATFORM_PROVISIONING=true antes do seed; não transforma ADMIN em administrador de outros tenants.
 
 | Método/rota sob /api/v1                                                             | Proteção/efeito                                                                     |
 | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
@@ -268,4 +268,61 @@ A configuração oficial executablePath seleciona esse browser, sem alterar Play
 
 Em 2026-10-06, passaram install congelado, lint, typecheck, test, test:integration, build de todos os apps/pacotes e test:e2e. **197 testes: 118 unitários (incluem 44 frontend/DOM), 10 HTTP, 55 integrações PostgreSQL/Redis e 14 E2E**. Todos os testes anteriores foram preservados. Canal BroadcastChannel nativo cobre comunicação com outra aba sem receber o próprio evento. Browser real valida concorrência de refresh/abas, isolamento de capacidades A/B, revogação, teclados/dialogs, rotas, 404, fonte Geist carregada e axe. Login, Dashboard, Configurações e navegação passaram nas cinco larguras, sem overflow global, erros de aplicação ou hydration. Somente o 401 esperado de refresh de visitante é reconhecido por mensagem e URL exatas.
 
-pnpm dev foi executado com os volumes existentes: PostgreSQL/Redis saudáveis, quatro migrations sem pendências e seed preservando credenciais. Health/live/ready, Swagger/OpenAPI, login do admin demo, refresh, logout, Ctrl+K e processamento pelo worker separado passaram. Artefatos públicos não contêm os secrets do servidor; .env permanece privado/ignorado e fixtures E2E foram removidas. Nenhuma migration ou funcionalidade comercial adicional. O CI preserva seus checks e adiciona Playwright/Chromium; sua execução remota não foi verificada nesta sessão. A fase 4 está concluída; a fase 5 depende de nova solicitação.
+pnpm dev foi executado com os volumes existentes: PostgreSQL/Redis saudáveis, quatro migrations sem pendências e seed preservando credenciais. Health/live/ready, Swagger/OpenAPI, login do admin demo, refresh, logout, Ctrl+K e processamento pelo worker separado passaram. Artefatos públicos não contêm os secrets do servidor; .env permanece privado/ignorado e fixtures E2E foram removidas. Nenhuma migration ou funcionalidade comercial adicional. O CI preserva seus checks e adiciona Playwright/Chromium; sua execução remota não foi verificada nesta sessão. Esta evidência encerrou a fase 4; a fase 5 foi autorizada e implementada posteriormente, conforme seção abaixo.
+
+## Clientes, empresas e tags — fase 5
+
+Após os comandos do primeiro início, use o admin demo configurado no `.env` para acessar `/contacts`, `/companies` e `/settings/tags`. O seed **não preenche esses cadastros**: o estado inicial é vazio e formulários escrevem na API real. Sem novos serviços/envs. As migrations comerciais são `20261007120000_create_contacts_companies_tags` e `20261007123000_create_assignment_history`, totalizando seis no histórico. Atualize um banco local existente com `pnpm db:migrate` e `pnpm db:seed`; não resetar o volume. Seed repetido preserva IDs, credenciais e dados, e amplia templates apenas da demo. Outros tenants existentes não recebem privilégios por migration.
+
+Contact e Company pertencem a uma organização, têm filial e responsável OrganizationMembership obrigatórios. O owner precisa possuir vínculo com aquela filial. Company é cliente B2B; não representa Organization. OWNER não é User global. Consulte ADR-014 para matriz dos seis templates, constraints, scope, normalização e consequências. ADMIN tem CRUD/assign e gestão de tags; DIRECTOR/SALES_MANAGER não têm delete; SELLER não transfere carteira; AFTER_SALES não cria; VIEWER somente lê. Esses nomes não autorizam por si: scopes vêm dos grants reais.
+
+Telefone de Contact é obrigatório e único por tenant após normalização, inclusive desativados. Preserve `+`/DDI quando conhecido: o sistema não acrescenta DDI brasileiro nem considera automaticamente equivalente um número local. E-mails comerciais podem ser compartilhados; documentos presentes são únicos por tenant/tipo, sem validação fiscal. Company permite telefone compartilhado. Tag é catálogo organizacional, com nome único e variante semântica; leitura exige tags.read, gestão exige tags.manage/ORGANIZATION.
+
+### Endpoints comerciais
+
+Todos usam base `http://localhost:3001/api/v1`, bearer válido e contexto atual. Não enviar organizationId no body/query. Swagger documenta requests, responses, filtros e erros reais.
+
+| Método e caminho                                                 | Ação/semântica                                                         |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| POST /contacts                                                   | contacts.create; contacts.assign se atribuir outra membership          |
+| GET /contacts                                                    | contacts.read, tenant/scope antes da keyset                            |
+| GET /contacts/:id                                                | contacts.read no objeto                                                |
+| PATCH /contacts/:id                                              | contacts.update; assign na transferência; expectedVersion obrigatório  |
+| DELETE /contacts/:id                                             | contacts.delete; desativação, expectedVersion no body, 200 com DTO     |
+| POST /companies                                                  | companies.create; companies.assign para outra membership               |
+| GET /companies                                                   | companies.read com tenant/scope                                        |
+| GET /companies/:id                                               | companies.read no objeto                                               |
+| PATCH /companies/:id                                             | companies.update; assign na transferência; expectedVersion obrigatório |
+| DELETE /companies/:id                                            | companies.delete; desativação, expectedVersion no body, 200 com DTO    |
+| GET /contacts/assignment-branches, /contacts/assignment-owners   | lookup paginado autorizado por action=read/create/update               |
+| GET /companies/assignment-branches, /companies/assignment-owners | mesma política, owners exige branchId                                  |
+| GET /tags                                                        | tags.read; catálogo exclusivamente do tenant atual                     |
+| POST /tags                                                       | tags.manage/ORGANIZATION                                               |
+| PATCH /tags/:id                                                  | tags.manage/ORGANIZATION e expectedVersion                             |
+| DELETE /tags/:id                                                 | tags.manage/ORGANIZATION; desativa com expectedVersion                 |
+
+Listas seguem o padrão existente `{data,pageInfo:{hasNextPage,nextCursor}}`, sem total/global ou offset. `limit` padrão 25/máximo 100. Contact/Company aceitam sort=name/createdAt/updatedAt, direction=asc/desc e cursor opaco; preserve a ordenação ao usar nextCursor. Cursor UUID em tags/diretórios. A web mantém filtros/cursor na URL e navega anterior/próximo sem inventar totalPages.
+
+Filtros de contatos: search (nome, telefone, e-mail, documento), branchId, ownerMembershipId, companyId, tagId, source e active. Empresas: search (nome/razão social, telefone, e-mail/documento), document exato, branchId, ownerMembershipId e active. Tags: search/active. Filtros de scope não são substituídos por opções de tela; empresa associada fora da autorização não é projetada e não pode ser consultada pelo filtro companyId. Detalhe de Company lista contatos pelo endpoint normal, preservando scope próprio.
+
+PATCH parcial mantém campos/associações omitidos. Desativação não libera telefone/documento/tag para recadastro e não apaga ContactTag/Company. Conflito por unique ou expectedVersion responde 409; formulário mantém entrada para correção/recarregamento. Transferências gravam histórico mínimo atomicamente, sem AuditLog completo ou timeline. Erros seguem Problem Details, sem SQL, hashes, stack ou constraint interna.
+
+TanStack Query usa a camada SessionClient existente; query keys incluem organização/membership/cacheScopeKey. O hash do contexto é fornecido pelo servidor e muda ao atualizar grants/filiais; uma nova resposta de sessão descarta o cache anterior quando ele muda. Não autoriza request nem substitui consultas de segurança. API/web possuem contratos estritos e devem ser lançadas juntas nesta alteração. Tokens e cache privado nunca são persistidos.
+
+### Validação da fase 5
+
+Os testes incluem normalização, payloads estritos, defaults de PATCH, scopes por ação, cache e componentes web; PostgreSQL real valida migrations limpas, seed repetido, FKs cruzadas, CRUD, permissões, concorrência, histórico/rollback e plano de query com 2000 registros. Browser real percorre empresa/tag/cliente, associação, edição, busca, desativação, duplicação, mudança de tenant e logout. Acessibilidade e overflow são avaliados em 375/768/1024/1440/1920px.
+
+```bash
+pnpm install --frozen-lockfile
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm test:integration
+pnpm build
+pnpm test:e2e
+```
+
+Instale o browser por `pnpm exec playwright install --with-deps chromium` ou use `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` conforme a instalação local documentada na fase 4. Integração/E2E usam projetos Compose próprios e removem só seus bancos/fixtures. Nenhum fluxo comercial depende de dados mockados no ambiente principal. Não há leads, pipeline, importações, WhatsApp, automações, dashboards reais ou IA nesta fase.
+
+Evidência final de **2026-10-07**: todos os comandos acima passaram. **270 testes**: 161 unitários (58 frontend/DOM incluídos), 10 HTTP, 79 integrações e 20 E2E; nenhum cenário anterior removido. Instalação limpa com seis migrations e seed repetido passou nos bancos isolados. O banco local anterior recebeu as duas migrations novas; repetição do seed preservou IDs/vínculos e manteve zero Contact/Company/Tag. pnpm dev iniciou os três processos: health/live/ready, Swagger/OpenAPI comercial, login/contexto/logout, listas autenticadas e job técnico pelo worker passaram. Browser em desenvolvimento confirmou clientes, empresas e tags, sem erros de console/hydration. Logs e 28 artefatos públicos foram conferidos sem secrets do servidor; .env permanece 0600/ignorado. O CI existente executa as suites ampliadas sem retirar checks; execução remota não foi verificada nesta sessão. A fase 5 está concluída; a fase 6 exige nova autorização.

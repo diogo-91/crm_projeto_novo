@@ -29,4 +29,12 @@ PageHeader, AppShell, Sidebar, Topbar, MetricCard e FilterBar pertencem à compo
 
 Usar somente tokens semânticos em componentes. Ícones Lucide, nomes acessíveis em ações icon-only, estados com texto, focus visible, skip link, labels/erros ligados por ID. Drawer fecha com Esc e após navegação; o foco retorna ao disparador. Não adicionar primitive, dependência ou variação sem consumidor real.
 
-Publicação e segurança de sessão estão no ADR-013. A preferência local da sidebar é a única persistência no navegador; tokens e dados privados nunca vão para storage. Dark mode, módulos comerciais e DataGrid não fazem parte desta entrega.
+Publicação e segurança de sessão estão no ADR-013. A preferência local da sidebar é a única persistência no navegador; tokens e dados privados nunca vão para storage. Dark mode e DataGrid não fazem parte da entrega. Os módulos comerciais autorizados na fase 5 reutilizam estes componentes.
+
+## Uso comercial — fase 5
+
+Textarea compartilha tokens e semântica de Input; observações são texto simples. Select associa id, aria-describedby e aria-invalid ao FormField, preserva opção vazia explícita e não duplica placeholder. ErrorState usa Button type=button para retry dentro de formulários.
+
+RecordDialog é composição da web, com conteúdo rolável limitado ao viewport e callbacks oficiais onOpenAutoFocus/onCloseAutoFocus do Radix para capturar/restaurar o foco de formulários abertos programaticamente. Após fechar, prioriza o botão disparador ainda conectado; quando uma atualização remove esse disparador, retorna ao botão principal informado. Não usar delays, queries CSS ou desabilitar o teste de foco.
+
+Clientes/empresas reutilizam Table desktop e cards mobile; overflow de tabela fica local. Tags só usam variantes Badge aprovadas, sem receber estilos CSS do usuário. Listagens, formulários e detalhes têm estados reais de loading, erro, ausência e permissão.

@@ -52,3 +52,15 @@ export function FormField({
     </div>
   );
 }
+
+export function Textarea({ className, ...props }: ComponentProps<'textarea'>) {
+  return (
+    <textarea
+      {...props}
+      className={cn(
+        'min-h-24 w-full rounded-md border bg-surface p-3 text-body placeholder:text-muted aria-invalid:border-danger disabled:opacity-50',
+        className,
+      )}
+    />
+  );
+}

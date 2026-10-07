@@ -22,6 +22,7 @@ const auth = {
     primaryBranchId: null,
     branches: [],
     roles: [],
+    cacheScopeKey: 'a'.repeat(64),
     permissions: ['users.read'],
   },
   accessToken: 'token-1',

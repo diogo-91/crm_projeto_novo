@@ -19,6 +19,10 @@ export function errorMessage(error: unknown, login = false): string {
   if (error.status === 401)
     return login ? 'Credenciais inválidas.' : 'Sua sessão expirou. Entre novamente.';
   if (error.status === 403) return 'Você não tem permissão para esta ação.';
+  if (error.status === 400) return 'Confira os campos e os filtros informados.';
+  if (error.status === 404) return 'O registro não está disponível para consulta.';
+  if (error.status === 409)
+    return 'Já existe um registro com estes dados ou ele foi alterado. Recarregue e confira os campos.';
   if (error.status === 429) return 'Muitas tentativas. Aguarde um pouco antes de tentar novamente.';
   return 'O serviço está indisponível no momento. Tente novamente em instantes.';
 }

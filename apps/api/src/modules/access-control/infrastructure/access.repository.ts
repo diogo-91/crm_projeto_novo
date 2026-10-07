@@ -12,7 +12,12 @@ import { OrganizationsAccessGateway } from '../../organizations/index.js';
 import { ApplicationError } from '../../../common/application-error.js';
 import { persist } from '../../../common/persistence-errors.js';
 import type { Principal } from '../../../common/security.js';
-import { canDelegate, orgPermission, validateGrant } from '../domain/access-policy.js';
+import {
+  canDelegate,
+  orgPermission,
+  collectionScope,
+  validateGrant,
+} from '../domain/access-policy.js';
 import type { TenantContext } from '../domain/access-policy.js';
 @Injectable()
 export class AccessRepository {
@@ -87,6 +92,7 @@ export class AccessRepository {
     transaction: DatabaseTransaction,
     context: TenantContext,
     permission: PermissionCode,
+    kind: 'organization' | 'collection' = 'organization',
   ) {
     await this.lockMembers(transaction, [context.membershipId]);
     await this.assertSession(transaction, context);
@@ -101,7 +107,8 @@ export class AccessRepository {
     );
     if (fresh.organizationId !== context.organizationId)
       throw new ApplicationError('FORBIDDEN', 'Organization context changed.');
-    orgPermission(fresh, permission);
+    if (kind === 'collection') collectionScope(fresh, permission);
+    else orgPermission(fresh, permission);
     return fresh;
   }
   private async assertSession(transaction: DatabaseTransaction, context: TenantContext) {

@@ -21,6 +21,7 @@ const context = z
     primaryBranchId: uuidSchema.nullable(),
     branches: z.array(z.object({ id: uuidSchema, name: z.string(), code: z.string() }).strict()),
     permissions: z.array(permissionCodeSchema),
+    cacheScopeKey: z.string().regex(/^[a-f0-9]{64}$/),
     roles: z.array(
       z
         .object({

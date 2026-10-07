@@ -1,10 +1,12 @@
 import type { Metadata } from 'next';
-import { ModulePlaceholder } from '@/components/layout/module-placeholder';
+import { Suspense } from 'react';
+import { CompanyList } from '@/features/companies/company-list';
+import { ListSkeleton } from '@/features/commercial/query-feedback';
 export const metadata: Metadata = { title: 'Empresas' };
 export default function Page() {
   return (
-    <>
-      <ModulePlaceholder href="/companies" />
-    </>
+    <Suspense fallback={<ListSkeleton />}>
+      <CompanyList />
+    </Suspense>
   );
 }

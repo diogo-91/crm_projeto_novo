@@ -1,3 +1,4 @@
+import { ContactsModule } from './modules/contacts/index.js';
 import { APP_GUARD } from '@nestjs/core';
 import { AuthenticationGuard, AuthorizationGuard } from './common/security.guards.js';
 import { AuthModule } from './modules/auth/index.js';
@@ -15,6 +16,7 @@ import { OrganizationsModule } from './modules/organizations/organizations.modul
     OrganizationsModule,
     AuthModule,
     AccessControlModule,
+    ContactsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: AuthenticationGuard },

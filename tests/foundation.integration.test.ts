@@ -12,6 +12,13 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createDatabaseClient } from '@crm/database';
 import type { DatabaseClient } from '@crm/database';
 import {
+  contactResponseSchema,
+  contactListResponseSchema,
+  companyResponseSchema,
+  companyListResponseSchema,
+  tagResponseSchema,
+  tagListResponseSchema,
+  assignmentListResponseSchema,
   authResponseSchema,
   meResponseSchema,
   organizationResponseSchema,
@@ -689,7 +696,7 @@ it('Swagger documents implemented organizational contracts with bearer security 
   );
 });
 
-it('database migration history on an empty PostgreSQL contains all four successful immutable migrations', async () => {
+it('database migration history on an empty PostgreSQL contains all six successful immutable migrations', async () => {
   const migrations = await db().$queryRaw<
     { migration_name: string; finished_at: Date | null; rolled_back_at: Date | null }[]
   >`SELECT migration_name, finished_at, rolled_back_at FROM "_prisma_migrations" ORDER BY migration_name`;
@@ -698,6 +705,8 @@ it('database migration history on an empty PostgreSQL contains all four successf
     '20261006144000_create_organization_branch_user_foundation',
     '20261006180000_create_auth_sessions_rbac',
     '20261006190000_enforce_grant_branch_reparenting',
+    '20261007120000_create_contacts_companies_tags',
+    '20261007123000_create_assignment_history',
   ]);
   expect(migrations.every((row) => row.finished_at !== null && row.rolled_back_at === null)).toBe(
     true,
@@ -1619,4 +1628,634 @@ it('password change racing login and refresh never leaves an old-credential sess
     (await authRequest('/me', {}, { token: current.body.accessToken, method: 'GET' })).status,
   ).toBe(401);
   expect((await login(member.user.email, newPassword)).body.user.id).toBe(member.user.id);
+});
+
+let phoneSequence = 0;
+function syntheticPhone() {
+  return '+5511' + String(++phoneSequence).padStart(8, '0');
+}
+async function commercialFixture() {
+  const org = await organization('Commercial integration');
+  const a = await branch(org.id, 'A');
+  const b = await branch(org.id, 'B');
+  const c = await branch(org.id, 'C');
+  const owner = await credentialUser(org.id, [a.id, b.id, c.id]);
+  const other = await credentialUser(org.id, [a.id, b.id, c.id]);
+  const token = await adminToken(org.id);
+  return { org, a, b, c, owner, other, token };
+}
+async function companyFixture(
+  f: Awaited<ReturnType<typeof commercialFixture>>,
+  branchId = f.a.id,
+  ownerMembershipId = f.owner.id,
+) {
+  const r = await authenticated('/companies', f.token, {
+    name: 'Synthetic company',
+    branchId,
+    ownerMembershipId,
+    document: 'GB-' + randomUUID(),
+  });
+  expect(r.status).toBe(201);
+  return companyResponseSchema.parse(await r.json());
+}
+async function contactFixture(
+  f: Awaited<ReturnType<typeof commercialFixture>>,
+  overrides: Record<string, unknown> = {},
+) {
+  const r = await authenticated('/contacts', f.token, {
+    name: 'Synthetic contact',
+    phone: syntheticPhone(),
+    branchId: f.a.id,
+    ownerMembershipId: f.owner.id,
+    ...overrides,
+  });
+  expect(r.status).toBe(201);
+  return contactResponseSchema.parse(await r.json());
+}
+it('commercial CRUD creates normalized contact, company, tags and preserves archive relationships', async () => {
+  const f = await commercialFixture();
+  const company = await companyFixture(f);
+  const t = await authenticated('/tags', f.token, { name: ' VIP ', variant: 'primary' });
+  expect(t.status).toBe(201);
+  const tag = tagResponseSchema.parse(await t.json());
+  const row = await contactFixture(f, {
+    phone: '+44 (20) 1234-5678',
+    email: ' CUSTOMER@EXAMPLE.TEST ',
+    document: 'US-123.456',
+    companyId: company.id,
+    tagIds: [tag.id],
+    notes: '<script>literal text</script>',
+  });
+  expect(row.email).toBe('customer@example.test');
+  expect(row.company?.id).toBe(company.id);
+  expect(row.tags[0]?.id).toBe(tag.id);
+  const stored = await db().contact.findUniqueOrThrow({ where: { id: row.id } });
+  expect(stored.normalizedPhone).toBe('+442012345678');
+  expect(stored.normalizedDocument).toBe('US123456');
+  expect(stored.createdByMembershipId).not.toBe(f.owner.id);
+  const changed = await authenticated(
+    `/contacts/${row.id}`,
+    f.token,
+    { name: 'Changed', expectedVersion: row.version },
+    'PATCH',
+  );
+  expect(changed.status).toBe(200);
+  const edited = contactResponseSchema.parse(await changed.json());
+  expect(edited.version).toBe(2);
+  expect(edited.tags[0]?.id).toBe(tag.id);
+  const archived = await authenticated(
+    `/contacts/${row.id}`,
+    f.token,
+    { expectedVersion: edited.version },
+    'DELETE',
+  );
+  expect(archived.status).toBe(200);
+  expect(contactResponseSchema.parse(await archived.json()).active).toBe(false);
+  expect(await db().contactTag.count({ where: { contactId: row.id } })).toBe(1);
+});
+it('commercial lists filter and keyset paginate before returning safe projections', async () => {
+  const f = await commercialFixture();
+  const company = await companyFixture(f);
+  await contactFixture(f, { name: 'Paged alpha', companyId: company.id, source: 'REFERRAL' });
+  await contactFixture(f, { name: 'Paged beta', companyId: company.id, source: 'REFERRAL' });
+  await contactFixture(f, { name: 'Other' });
+  const q = `/contacts?limit=1&sort=name&direction=asc&search=Paged&companyId=${company.id}&source=REFERRAL&branchId=${f.a.id}&ownerMembershipId=${f.owner.id}&active=true`;
+  const first = contactListResponseSchema.parse(await (await authenticated(q, f.token)).json());
+  expect(first.data[0]?.name).toBe('Paged alpha');
+  expect(first.pageInfo.hasNextPage).toBe(true);
+  const second = contactListResponseSchema.parse(
+    await (
+      await authenticated(
+        q + '&cursor=' + encodeURIComponent(first.pageInfo.nextCursor ?? ''),
+        f.token,
+      )
+    ).json(),
+  );
+  expect(second.data[0]?.name).toBe('Paged beta');
+  expect(second.pageInfo.hasNextPage).toBe(false);
+  expect(JSON.stringify(first)).not.toMatch(
+    /passwordHash|normalizedPhone|createdByMembershipId|securityVersion|permissions/,
+  );
+  expect((await authenticated('/contacts?limit=101', f.token)).status).toBe(400);
+  expect((await authenticated('/contacts?sort=passwordHash', f.token)).status).toBe(400);
+  expect((await authenticated('/contacts?cursor=bad', f.token)).status).toBe(400);
+});
+it('phone uniqueness is tenant scoped, handles concurrent creation and retains archived identity', async () => {
+  const a = await commercialFixture();
+  const b = await commercialFixture();
+  const phone = syntheticPhone();
+  const payload = { name: 'Race', phone, branchId: a.a.id, ownerMembershipId: a.owner.id };
+  const results = await Promise.all([
+    authenticated('/contacts', a.token, payload),
+    authenticated('/contacts', a.token, payload),
+  ]);
+  expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+  const row = contactResponseSchema.parse(await results.find((r) => r.status === 201)?.json());
+  expect(
+    (
+      await authenticated(
+        `/contacts/${row.id}`,
+        a.token,
+        { expectedVersion: row.version },
+        'DELETE',
+      )
+    ).status,
+  ).toBe(200);
+  expect((await authenticated('/contacts', a.token, payload)).status).toBe(409);
+  await contactFixture(b, { phone });
+});
+it('company and contact documents dedupe per tenant while shared emails remain legal', async () => {
+  const f = await commercialFixture();
+  const first = await contactFixture(f, { document: 'US-456.789', email: 'shared@example.test' });
+  await contactFixture(f, { email: 'shared@example.test' });
+  expect(
+    (
+      await authenticated('/contacts', f.token, {
+        name: 'Duplicate doc',
+        phone: syntheticPhone(),
+        document: 'us456789',
+        branchId: f.a.id,
+        ownerMembershipId: f.owner.id,
+      })
+    ).status,
+  ).toBe(409);
+  const company = await companyFixture(f);
+  expect(
+    (
+      await authenticated('/companies', f.token, {
+        name: 'Duplicate',
+        branchId: f.a.id,
+        ownerMembershipId: f.owner.id,
+        document: company.document,
+      })
+    ).status,
+  ).toBe(409);
+  expect(
+    (
+      await authenticated(
+        `/contacts/${first.id}`,
+        f.token,
+        { phone: syntheticPhone(), expectedVersion: 0 },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(400);
+});
+it('tag normalization dedupes concurrent names and restricts variants', async () => {
+  const f = await commercialFixture();
+  const results = await Promise.all([
+    authenticated('/tags', f.token, { name: ' VIP  account ' }),
+    authenticated('/tags', f.token, { name: 'vip account' }),
+  ]);
+  expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+  const tag = tagResponseSchema.parse(await results.find((r) => r.status === 201)?.json());
+  expect(
+    (
+      await authenticated(
+        `/tags/${tag.id}`,
+        f.token,
+        { name: 'Renamed', expectedVersion: tag.version },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(200);
+  expect(
+    (await authenticated(`/tags/${tag.id}`, f.token, { expectedVersion: 2 }, 'DELETE')).status,
+  ).toBe(200);
+  expect(
+    (
+      await authenticated('/tags', f.token, {
+        name: 'Unsafe',
+        variant: 'red; background:url(evil)',
+      })
+    ).status,
+  ).toBe(400);
+});
+it.each(['branch', 'owner', 'company', 'tag'] as const)(
+  'rejects cross-tenant %s association atomically in API and PostgreSQL',
+  async (kind) => {
+    const a = await commercialFixture();
+    const b = await commercialFixture();
+    const company = await companyFixture(b);
+    const tag = tagResponseSchema.parse(
+      await (await authenticated('/tags', b.token, { name: 'Foreign' })).json(),
+    );
+    const payload = {
+      name: 'Foreign relationship',
+      phone: syntheticPhone(),
+      branchId: kind === 'branch' ? b.a.id : a.a.id,
+      ownerMembershipId: kind === 'owner' ? b.owner.id : a.owner.id,
+      companyId: kind === 'company' ? company.id : null,
+      tagIds: kind === 'tag' ? [tag.id] : [],
+    };
+    const response = await authenticated('/contacts', a.token, payload);
+    expect([403, 404]).toContain(response.status);
+    expect(await db().contact.count({ where: { organizationId: a.org.id } })).toBe(0);
+    if (kind !== 'tag') {
+      const actor = await db().organizationMembership.findFirstOrThrow({
+        where: { organizationId: a.org.id, user: { email: 'admin.demo@example.test' } },
+      });
+      await expect(
+        db().contact.create({
+          data: {
+            organizationId: a.org.id,
+            name: 'Direct cross tenant',
+            phone: payload.phone,
+            normalizedPhone: payload.phone,
+            branchId: payload.branchId,
+            ownerMembershipId: payload.ownerMembershipId,
+            companyId: payload.companyId,
+            createdByMembershipId: actor.id,
+            updatedByMembershipId: actor.id,
+          },
+        }),
+      ).rejects.toMatchObject({ code: 'P2003' });
+    } else {
+      const row = await contactFixture(a);
+      await expect(
+        db().contactTag.create({
+          data: { organizationId: a.org.id, contactId: row.id, tagId: tag.id },
+        }),
+      ).rejects.toMatchObject({ code: 'P2003' });
+    }
+  },
+);
+it('cross-tenant IDs never permit reads, mutations or enumeration', async () => {
+  const a = await commercialFixture();
+  const b = await commercialFixture();
+  const row = await contactFixture(b);
+  const company = await companyFixture(b);
+  for (const path of [`/contacts/${row.id}`, `/companies/${company.id}`]) {
+    expect((await authenticated(path, a.token)).status).toBe(404);
+    expect(
+      (await authenticated(path, a.token, { name: 'Attack', expectedVersion: 1 }, 'PATCH')).status,
+    ).toBe(404);
+    expect((await authenticated(path, a.token, { expectedVersion: 1 }, 'DELETE')).status).toBe(404);
+  }
+  expect(
+    contactListResponseSchema.parse(await (await authenticated('/contacts', a.token)).json()).data,
+  ).toEqual([]);
+  expect(
+    companyListResponseSchema.parse(await (await authenticated('/companies', a.token)).json()).data,
+  ).toEqual([]);
+  expect(
+    tagListResponseSchema.parse(await (await authenticated('/tags', a.token)).json()).data,
+  ).toEqual([]);
+});
+it.each(['OWN', 'BRANCH', 'BRANCH_SET', 'ORGANIZATION'] as const)(
+  'commercial scope %s protects lists, lookups, mutations and company-linked contact lists',
+  async (scope) => {
+    const f = await commercialFixture();
+    const company = await companyFixture(f);
+    const own = await contactFixture(f, { companyId: company.id });
+    const companySame = await companyFixture(f, f.a.id, f.other.id);
+    const companyB = await companyFixture(f, f.b.id, f.other.id);
+    const companyC = await companyFixture(f, f.c.id, f.other.id);
+    const sameBranch = await contactFixture(f, {
+      ownerMembershipId: f.other.id,
+      companyId: company.id,
+    });
+    const branchB = await contactFixture(f, {
+      branchId: f.b.id,
+      ownerMembershipId: f.other.id,
+      companyId: company.id,
+    });
+    const branchC = await contactFixture(f, {
+      branchId: f.c.id,
+      ownerMembershipId: f.other.id,
+      companyId: company.id,
+    });
+    await assign(
+      f.org.id,
+      f.owner.id,
+      scope === 'ORGANIZATION' ? 'DIRECTOR' : 'SELLER',
+      scope,
+      scope === 'BRANCH' ? [f.a.id] : scope === 'BRANCH_SET' ? [f.a.id, f.b.id] : [],
+    );
+    const signed = await login(f.owner.user.email);
+    const token = signed.body.accessToken;
+    const expected =
+      scope === 'OWN'
+        ? [own.id]
+        : scope === 'BRANCH'
+          ? [own.id, sameBranch.id]
+          : scope === 'BRANCH_SET'
+            ? [own.id, sameBranch.id, branchB.id]
+            : [own.id, sameBranch.id, branchB.id, branchC.id];
+    const list = contactListResponseSchema.parse(
+      await (await authenticated(`/contacts?companyId=${company.id}&limit=100`, token)).json(),
+    );
+    expect(list.data.map((row) => row.id).sort()).toEqual(expected.sort());
+    const expectedCompanies =
+      scope === 'OWN'
+        ? [company.id]
+        : scope === 'BRANCH'
+          ? [company.id, companySame.id]
+          : scope === 'BRANCH_SET'
+            ? [company.id, companySame.id, companyB.id]
+            : [company.id, companySame.id, companyB.id, companyC.id];
+    const companies = companyListResponseSchema.parse(
+      await (await authenticated('/companies?limit=100', token)).json(),
+    );
+    expect(companies.data.map((row) => row.id).sort()).toEqual(expectedCompanies.sort());
+    for (const row of [company, companySame, companyB, companyC]) {
+      const allowed = expectedCompanies.includes(row.id);
+      expect((await authenticated(`/companies/${row.id}`, token)).status).toBe(allowed ? 200 : 404);
+      expect(
+        (
+          await authenticated(
+            `/companies/${row.id}`,
+            token,
+            { notes: 'Scoped company edit', expectedVersion: row.version },
+            'PATCH',
+          )
+        ).status,
+      ).toBe(allowed ? 200 : 404);
+    }
+    for (const row of [own, sameBranch, branchB, branchC]) {
+      const allowed = expected.includes(row.id);
+      expect((await authenticated(`/contacts/${row.id}`, token)).status).toBe(allowed ? 200 : 404);
+      expect(
+        (
+          await authenticated(
+            `/contacts/${row.id}`,
+            token,
+            { notes: 'Authorized edit', expectedVersion: row.version },
+            'PATCH',
+          )
+        ).status,
+      ).toBe(allowed ? 200 : 404);
+    }
+    const branches = assignmentListResponseSchema.parse(
+      await (await authenticated('/contacts/assignment-branches?action=create', token)).json(),
+    );
+    expect(branches.data.map((row) => row.id).sort()).toEqual(
+      (scope === 'BRANCH'
+        ? [f.a.id]
+        : scope === 'BRANCH_SET'
+          ? [f.a.id, f.b.id]
+          : [f.a.id, f.b.id, f.c.id]
+      ).sort(),
+    );
+    const owners = assignmentListResponseSchema.parse(
+      await (
+        await authenticated(`/contacts/assignment-owners?action=create&branchId=${f.a.id}`, token)
+      ).json(),
+    );
+    if (scope === 'OWN') expect(owners.data.map((row) => row.id)).toEqual([f.owner.id]);
+  },
+);
+it('action-specific grants do not borrow broad scopes and OWNER cannot transfer without assign', async () => {
+  const f = await commercialFixture();
+  await assign(f.org.id, f.owner.id, 'SELLER', 'OWN');
+  const broad = await db().role.create({
+    data: {
+      organizationId: f.org.id,
+      code: 'COMPANY_ONLY',
+      name: 'Company only',
+      description: 'Fixture',
+    },
+  });
+  const permission = await db().permission.findUniqueOrThrow({ where: { code: 'companies.read' } });
+  await db().rolePermission.create({
+    data: { organizationId: f.org.id, roleId: broad.id, permissionId: permission.id },
+  });
+  await db().userRole.create({
+    data: {
+      organizationId: f.org.id,
+      membershipId: f.owner.id,
+      roleId: broad.id,
+      scope: 'ORGANIZATION',
+    },
+  });
+  const own = await contactFixture(f);
+  const other = await contactFixture(f, { ownerMembershipId: f.other.id });
+  const signed = await login(f.owner.user.email);
+  expect((await authenticated(`/contacts/${other.id}`, signed.body.accessToken)).status).toBe(404);
+  expect(
+    (
+      await authenticated(
+        `/contacts/${own.id}`,
+        signed.body.accessToken,
+        { branchId: f.b.id, expectedVersion: own.version },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(403);
+  expect(
+    (
+      await authenticated('/contacts', signed.body.accessToken, {
+        name: 'Assign other',
+        phone: syntheticPhone(),
+        branchId: f.a.id,
+        ownerMembershipId: f.other.id,
+      })
+    ).status,
+  ).toBe(403);
+});
+it('company visibility and contact visibility are independent; joins cannot reveal hidden companies', async () => {
+  const f = await commercialFixture();
+  const company = await companyFixture(f, f.a.id, f.other.id);
+  const contact = await contactFixture(f, { companyId: company.id });
+  await assign(f.org.id, f.owner.id, 'SELLER', 'OWN');
+  const signed = await login(f.owner.user.email);
+  const read = contactResponseSchema.parse(
+    await (await authenticated(`/contacts/${contact.id}`, signed.body.accessToken)).json(),
+  );
+  expect(read.company).toBeNull();
+  expect((await authenticated(`/companies/${company.id}`, signed.body.accessToken)).status).toBe(
+    404,
+  );
+  expect(
+    (await authenticated(`/contacts?companyId=${company.id}`, signed.body.accessToken)).status,
+  ).toBe(404);
+  expect(
+    (
+      await authenticated('/contacts', signed.body.accessToken, {
+        name: 'Hidden company link',
+        phone: syntheticPhone(),
+        branchId: f.a.id,
+        companyId: company.id,
+      })
+    ).status,
+  ).toBe(404);
+});
+it('owner must remain linked to the branch and inactive assignments cannot create records', async () => {
+  const f = await commercialFixture();
+  const unlinked = await identity(f.org.id, []);
+  expect(
+    (
+      await authenticated('/contacts', f.token, {
+        name: 'Unlinked',
+        phone: syntheticPhone(),
+        branchId: f.a.id,
+        ownerMembershipId: unlinked.id,
+      })
+    ).status,
+  ).toBe(404);
+  await db().organizationMembership.update({ where: { id: f.owner.id }, data: { active: false } });
+  expect(
+    (
+      await authenticated('/companies', f.token, {
+        name: 'Inactive owner',
+        branchId: f.a.id,
+        ownerMembershipId: f.owner.id,
+      })
+    ).status,
+  ).toBe(404);
+});
+it('transaction rolls back contact and associations when any tag is invalid', async () => {
+  const f = await commercialFixture();
+  const tag = tagResponseSchema.parse(
+    await (await authenticated('/tags', f.token, { name: 'Valid' })).json(),
+  );
+  expect(
+    (
+      await authenticated('/contacts', f.token, {
+        name: 'Rollback',
+        phone: syntheticPhone(),
+        branchId: f.a.id,
+        ownerMembershipId: f.owner.id,
+        tagIds: [tag.id, randomUUID()],
+      })
+    ).status,
+  ).toBe(404);
+  expect(await db().contact.count({ where: { organizationId: f.org.id } })).toBe(0);
+  expect(await db().contactTag.count({ where: { organizationId: f.org.id } })).toBe(0);
+});
+it('concurrent contact updates do not lose writes or mix tag sets', async () => {
+  const f = await commercialFixture();
+  const row = await contactFixture(f);
+  const replies = await Promise.all([
+    authenticated(
+      `/contacts/${row.id}`,
+      f.token,
+      { name: 'A', expectedVersion: row.version },
+      'PATCH',
+    ),
+    authenticated(
+      `/contacts/${row.id}`,
+      f.token,
+      { name: 'B', expectedVersion: row.version },
+      'PATCH',
+    ),
+  ]);
+  expect(replies.map((r) => r.status).sort()).toEqual([200, 409]);
+  expect((await db().contact.findUniqueOrThrow({ where: { id: row.id } })).version).toBe(2);
+});
+it('permissions deny anonymous and VIEWER mutations while allowing bounded reads', async () => {
+  const f = await commercialFixture();
+  await assign(f.org.id, f.owner.id, 'VIEWER', 'ORGANIZATION');
+  const signed = await login(f.owner.user.email);
+  for (const resource of ['contacts', 'companies', 'tags']) {
+    expect((await fetch(url + '/api/v1/' + resource)).status).toBe(401);
+    expect((await authenticated('/' + resource, signed.body.accessToken)).status).toBe(200);
+    expect((await authenticated('/' + resource, signed.body.accessToken, {})).status).toBe(403);
+  }
+});
+it('commercial Swagger schemas expose strict contracts, filters and no internal columns', async () => {
+  const document: unknown = await (await fetch(url + '/docs/openapi.json')).json();
+  expect(document).toHaveProperty('paths./api/v1/contacts.post');
+  expect(document).toHaveProperty('paths./api/v1/companies/{id}.patch');
+  expect(document).toHaveProperty('paths./api/v1/tags/{id}.delete');
+  expect(document).toHaveProperty(
+    'paths./api/v1/contacts.post.requestBody.content.application/json.schema.additionalProperties',
+    false,
+  );
+  expect(JSON.stringify(document)).not.toMatch(
+    /normalizedPhone|passwordHash|updatedByMembershipId/,
+  );
+});
+it('default tenant keyset query uses its index with a representative synthetic dataset', async () => {
+  const f = await commercialFixture();
+  const actor = await db().organizationMembership.findFirstOrThrow({
+    where: { organizationId: f.org.id, user: { email: 'admin.demo@example.test' } },
+  });
+  await db().contact.createMany({
+    data: Array.from({ length: 2000 }, (_, index) => ({
+      organizationId: f.org.id,
+      branchId: f.a.id,
+      ownerMembershipId: f.owner.id,
+      name: `Performance fixture ${index}`,
+      phone: '+1212' + String(index).padStart(8, '0'),
+      normalizedPhone: '+1212' + String(index).padStart(8, '0'),
+      createdByMembershipId: actor.id,
+      updatedByMembershipId: actor.id,
+      createdAt: new Date(1700000000000 + index),
+    })),
+  });
+  await db().$executeRaw`ANALYZE contacts`;
+  const plans = await db().$queryRaw<
+    { 'QUERY PLAN': unknown }[]
+  >`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT id,name FROM contacts WHERE organization_id=${f.org.id}::uuid ORDER BY created_at DESC,id DESC LIMIT 26`;
+  expect(JSON.stringify(plans)).toContain('contacts_organization_id_created_at_id_idx');
+  const list = contactListResponseSchema.parse(
+    await (await authenticated('/contacts?limit=25', f.token)).json(),
+  );
+  expect(list.data).toHaveLength(25);
+  expect(list.pageInfo.hasNextPage).toBe(true);
+});
+it('authorized assignment changes preserve minimal history atomically and reject stale changes', async () => {
+  const f = await commercialFixture();
+  const contact = await contactFixture(f);
+  const company = await companyFixture(f);
+  for (const [resource, record] of [
+    ['contacts', contact],
+    ['companies', company],
+  ] as const) {
+    const changed = await authenticated(
+      `/${resource}/${record.id}`,
+      f.token,
+      { branchId: f.b.id, ownerMembershipId: f.other.id, expectedVersion: record.version },
+      'PATCH',
+    );
+    expect(changed.status).toBe(200);
+    const history =
+      resource === 'contacts'
+        ? await db().contactAssignmentHistory.findMany({ where: { contactId: record.id } })
+        : await db().companyAssignmentHistory.findMany({ where: { companyId: record.id } });
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      organizationId: f.org.id,
+      fromBranchId: f.a.id,
+      toBranchId: f.b.id,
+      fromOwnerMembershipId: f.owner.id,
+      toOwnerMembershipId: f.other.id,
+      recordVersion: 2,
+    });
+    expect(
+      (
+        await authenticated(
+          `/${resource}/${record.id}`,
+          f.token,
+          { branchId: f.c.id, expectedVersion: 1 },
+          'PATCH',
+        )
+      ).status,
+    ).toBe(409);
+  }
+});
+it('current authorization changes invalidate the commercial cache scope without changing permission codes', async () => {
+  const f = await commercialFixture();
+  const grantId = await assign(f.org.id, f.owner.id, 'SELLER', 'BRANCH_SET', [f.a.id, f.b.id]);
+  const signed = await login(f.owner.user.email);
+  const before = meResponseSchema.parse(
+    await (await authenticated('/auth/me', signed.body.accessToken)).json(),
+  );
+  await db().userRoleBranch.deleteMany({
+    where: { organizationId: f.org.id, userRoleId: grantId, branchId: f.b.id },
+  });
+  const after = meResponseSchema.parse(
+    await (await authenticated('/auth/me', signed.body.accessToken)).json(),
+  );
+  expect(after.context?.permissions).toEqual(before.context?.permissions);
+  expect(after.context?.cacheScopeKey).not.toEqual(before.context?.cacheScopeKey);
+  expect(
+    (
+      await authenticated(
+        `/companies/assignment-owners?action=create&branchId=${f.b.id}`,
+        signed.body.accessToken,
+      )
+    ).status,
+  ).toBe(403);
 });

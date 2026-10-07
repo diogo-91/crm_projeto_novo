@@ -1,3 +1,4 @@
+import { requestMetadata } from './request-metadata.js';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import type { RequestHandler } from 'express';
@@ -24,6 +25,6 @@ export function requestContext(logger: StructuredLogger): RequestHandler {
         durationMs: Math.round(performance.now() - started),
       }),
     );
-    next();
+    requestMetadata.run({ requestId, correlationId }, next);
   };
 }

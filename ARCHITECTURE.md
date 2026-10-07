@@ -2,7 +2,7 @@
 
 ## 1. Escopo, estado e princípios
 
-Decisão inicial: **monólito modular**, organizado em um monorepo pnpm/Turborepo. O produto terá uma aplicação web, uma API e um worker. API e worker são processos do mesmo backend: usam módulos, banco, contratos e releases compatíveis; não constituem microserviços. A fase 0 definiu o desenho. A fase 1 implementa somente a fundação descrita no README: web técnica, API/worker, configuração/logs, health/Swagger e PostgreSQL/Redis/BullMQ. A fase 2 implementa somente a estrutura de organizações, filiais e identidade global com memberships. A fase 3 implementa Auth/AccessControl e protege a estrutura organizacional. Não há funcionalidades comerciais ou integrações externas. ADR-010 registra a fundação; ADR-011 é histórico e ADR-012 encerra a exceção local sem auth.
+Decisão inicial: **monólito modular**, organizado em um monorepo pnpm/Turborepo. O produto terá uma aplicação web, uma API e um worker. API e worker são processos do mesmo backend: usam módulos, banco, contratos e releases compatíveis; não constituem microserviços. A fase 0 definiu o desenho. A fase 1 implementa somente a fundação descrita no README: web técnica, API/worker, configuração/logs, health/Swagger e PostgreSQL/Redis/BullMQ. A fase 2 implementa somente a estrutura de organizações, filiais e identidade global com memberships. A fase 3 implementa Auth/AccessControl e protege a estrutura organizacional. A fase 4 implementa layout/design system e sessão web; a fase 5 implementa Contacts, Companies e Tags. Não há outras funcionalidades comerciais ou integrações externas. ADR-010 registra a fundação; ADR-011 é histórico e ADR-012 encerra a exceção local sem auth.
 
 O objetivo é atender múltiplas organizações, lojas, equipes e vendedores com isolamento forte. Simplicidade, legibilidade, type safety, segurança, testabilidade, baixo acoplamento e evolução incremental orientam escolhas. Não usar Kubernetes, event sourcing, GraphQL ou CQRS completo. Não criar engine genérica, abstrações sem consumidor ou filas para operações síncronas simples.
 
@@ -33,14 +33,14 @@ crm_projeto_novo/
 ├── DATABASE.md
 ├── ROADMAP.md
 ├── docs/adr/
-├── apps/                         # futuro
+├── apps/                         # implementado
 │   ├── web/
 │   │   └── src/{app,features,components,hooks,lib}
 │   ├── api/
 │   │   └── src/{bootstrap,modules,common}
 │   └── worker/
 │       └── src/{bootstrap,jobs}
-└── packages/                     # futuro
+└── packages/                     # implementado
     ├── database/
     │   └── {prisma,migrations,src}
     ├── contracts/
@@ -92,6 +92,7 @@ Fluxo: controller valida e normaliza request → application autoriza recurso/es
 | `access-control` | Role, Permission, RolePermission, UserRole e avaliação granular de escopos                                                      |
 | `contacts`       | clientes/pessoas Contact e relacionamento com Company                                                                           |
 | `companies`      | empresas clientes B2B; Company nunca representa o tenant                                                                        |
+| `tags`           | catálogo organizacional e classificação de clientes; implementado na fase 5                                                     |
 | `leads`          | captação, qualificação e conversão transacional local                                                                           |
 | `pipelines`      | Pipeline/Stage, ordenação e regras de configuração                                                                              |
 | `opportunities`  | negociação, Kanban, dono, movimentação e histórico                                                                              |
@@ -431,3 +432,19 @@ ADR-013 registra design system compartilhado em packages/ui, tokens Tailwind/sha
 Auth/context expõe permissões do contexto para UX, sem duplicar escopos no frontend. API continua sendo a única autoridade. Can não substitui autorização de recurso. TanStack Query não foi antecipado para duplicar auth; será usado pelas features interativas sob as regras de cache da seção 7. Nenhum dado privado é renderizado em RSC nesta fase; placeholders possuem somente conteúdo estrutural público. Gate de rotas protege UX e redireciona visitantes, sem criar segunda sessão Next/BFF.
 
 Por solicitação expressa, todas as entradas do menu possuem página-base com composição comum e sem dados comerciais fictícios. docs/DESIGN_SYSTEM.md detalha tokens e componentes. Não existe CRUD comercial, dashboard real, inbox ou Kanban. Playwright valida frontend com API/PG/Redis reais descartáveis; Vitest DOM valida componentes/HTTP/sessão, preservando as suites anteriores.
+
+## Fundação comercial implementada — fase 5
+
+ADR-014 registra Contact/Company com filial e ownerMembership obrigatórios, Tag/ContactTag e histórico mínimo de transferências. A FK tenant+owner+filial aponta a MembershipBranch. Reatribuição deve preservar acesso na origem/destino para update e assign; OWNER global não é uma chave de carteira. Grants comerciais e administrativos continuam independentes.
+
+ContactsModule depende dos exports CompaniesLookupGateway, TagsLookupGateway e CommercialDirectoryGateway. Gateways recebem transação exclusivamente em infrastructure, sem circularidade ou acesso Prisma nos controllers/application. Companies não importa Contacts: a página de empresa usa GET /contacts?companyId=... com autorização de contatos e acesso à empresa revalidados. Projeções de empresas associadas ficam ocultas quando companies.read não alcança o objeto.
+
+Listas aplicam tenant e scopes no SQL antes da keyset existente `{data,pageInfo}`; ordenações permitidas têm id como desempate. APIs CRUD comerciais são bearer; PATCH/DELETE exigem versão esperada. DELETE desativa e preserva relações, não cria exclusão física. Updates condicionais impedem lost updates. Transferências gravam ContactAssignmentHistory/CompanyAssignmentHistory na mesma transação; não antecipam AuditLog completo ou timeline. Não há eventos, outbox ou filas sem consumidor.
+
+A política de telefone foi refinada nesta fase: Contact tem unique por tenant+telefone normalizado; e-mail comercial permanece não único. A normalização não presume DDI ou país. Documentos presentes são identificadores opacos únicos por tenant/tipo de entidade; regras fiscais não fazem parte do núcleo. Tags só classificam contatos; gestão exige tags.manage/ORGANIZATION, leitura exige tags.read válido. Matriz completa e consequências ficam no ADR-014. Seed só amplia templates da demo e templates de organizações novas; nenhum grant de outro tenant é expandido pela migration.
+
+Web usa TanStack Query sobre o ApiClient/SessionClient existente, com queries/mutations em features/commercial. Cache é privado por identidade, organização, membership e cacheScopeKey derivada no servidor dos grants/filiais; quando o contexto atualizado muda, cancela requests e descarta Client anterior. Nunca persistir access, cache privado ou scopes em storage. A chave de cache não autoriza acesso e não substitui revalidação backend. Contratos estritos do contexto exigem release API/web coordenado.
+
+Filtros são estado de URL; busca tem debounce e cancela requests obsoletos. Formulários RHF/Zod preservam valores em erro, usam versão e não apagam associações não alteradas/ocultas. Listagens, cadastros, detalhes, edição e confirmação de desativação são funcionais; demais módulos permanecem páginas-base da fase 4. Loading/empty/error/forbidden/retry e navegação responsiva usam o design system existente.
+
+Logging comercial contém tipos de evento e IDs, com requestId/correlationId propagados pelo contexto assíncrono. Nome, telefone, documento, e-mail e notas não são payloads de log. Listas carregam rótulos em lotes e têm limite 100; índices B-tree para tenant, owner, filial, ordenação e joins. Busca substring pode examinar registros autorizados do tenant; não promete índice de texto antes de medição. Teste PostgreSQL real usa volume representativo e EXPLAIN para conferir o índice de ordenação padrão.

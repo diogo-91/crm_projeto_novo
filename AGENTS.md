@@ -2,7 +2,7 @@
 
 ## Estado e objetivo
 
-Este repositório inicia um CRM comercial multiempresa e multiloja. A fase 0 definiu os documentos. A fase 1 criou a fundação técnica. A fase 2 adiciona Organization, Branch, User global, OrganizationMembership e MembershipBranch, com API estrutural mínima local. A fase 3 implementa credenciais Argon2id, JWT curto, sessões/refresh rotativos e RBAC com escopos. A fase 4 adiciona design system, layout responsivo, páginas-base e integração web de sessão. Não há módulos comerciais. A exceção de endpoints administrativos públicos do ADR-011 foi encerrada pelo ADR-012. Consulte README.md para instalação e operação. Não confundir decisões planejadas com funcionalidades implementadas. Implementar somente a etapa explicitamente autorizada pelo solicitante; não antecipar telas, CRUDs, autenticação ou integrações.
+Este repositório inicia um CRM comercial multiempresa e multiloja. A fase 0 definiu os documentos. A fase 1 criou a fundação técnica. A fase 2 adiciona Organization, Branch, User global, OrganizationMembership e MembershipBranch, com API estrutural mínima local. A fase 3 implementa credenciais Argon2id, JWT curto, sessões/refresh rotativos e RBAC com escopos. A fase 4 adiciona design system, layout responsivo, páginas-base e integração web de sessão. A fase 5 implementa Contacts, Companies e Tags com escopos, carteira/filial, histórico mínimo de transferências e UI funcional. A exceção de endpoints administrativos públicos do ADR-011 foi encerrada pelo ADR-012. Consulte README.md para instalação e operação. Não confundir decisões planejadas com funcionalidades implementadas. Implementar somente a etapa explicitamente autorizada pelo solicitante; não antecipar telas, CRUDs, autenticação ou integrações.
 
 Ler antes de alterar o projeto:
 
@@ -47,20 +47,20 @@ A árvore principal está implementada; criar conteúdo adicional somente quando
 
 Executar na raiz após `pnpm install`, `pnpm env:init` e preparo da infraestrutura. Os comandos e seus pré-requisitos estão no README.md:
 
-| Diretório | Comando                               | Finalidade                                                                         |
-| --------- | ------------------------------------- | ---------------------------------------------------------------------------------- |
-| raiz      | `pnpm install --frozen-lockfile`      | instalar dependências fixadas                                                      |
-| raiz      | `docker compose up -d postgres redis` | serviços locais; não conectar produção                                             |
-| raiz      | `pnpm dev`                            | Turborepo inicia web/API/worker                                                    |
-| raiz      | `pnpm build`                          | build e geração necessária em ordem topológica                                     |
-| raiz      | `pnpm lint` / `pnpm typecheck`        | análise estática                                                                   |
-| raiz      | `pnpm test`                           | testes unitários/HTTP técnicos e DOM frontend                                      |
-| raiz      | `pnpm test:integration`               | integração técnica com serviços/processos isolados; E2E comercial ainda não existe |
-| raiz      | `pnpm test:e2e`                       | build e jornadas web com Playwright/API/PostgreSQL/Redis isolados                  |
-| raiz      | `pnpm db:generate`                    | gerar Prisma Client                                                                |
-| raiz      | `pnpm db:migrate:dev --name <nome>`   | criar migration em banco local descartável                                         |
-| raiz      | `pnpm db:migrate`                     | aplicar migrations revisadas no ambiente autorizado                                |
-| raiz      | `pnpm db:seed`                        | marcador técnico e organização/filiais/usuário demo; seed idempotente              |
+| Diretório | Comando                               | Finalidade                                                                |
+| --------- | ------------------------------------- | ------------------------------------------------------------------------- |
+| raiz      | `pnpm install --frozen-lockfile`      | instalar dependências fixadas                                             |
+| raiz      | `docker compose up -d postgres redis` | serviços locais; não conectar produção                                    |
+| raiz      | `pnpm dev`                            | Turborepo inicia web/API/worker                                           |
+| raiz      | `pnpm build`                          | build e geração necessária em ordem topológica                            |
+| raiz      | `pnpm lint` / `pnpm typecheck`        | análise estática                                                          |
+| raiz      | `pnpm test`                           | testes unitários/HTTP técnicos e DOM frontend                             |
+| raiz      | `pnpm test:integration`               | integração real com serviços/processos isolados, RBAC e fluxos comerciais |
+| raiz      | `pnpm test:e2e`                       | build e jornadas web com Playwright/API/PostgreSQL/Redis isolados         |
+| raiz      | `pnpm db:generate`                    | gerar Prisma Client                                                       |
+| raiz      | `pnpm db:migrate:dev --name <nome>`   | criar migration em banco local descartável                                |
+| raiz      | `pnpm db:migrate`                     | aplicar migrations revisadas no ambiente autorizado                       |
+| raiz      | `pnpm db:seed`                        | marcador técnico e organização/filiais/usuário demo; seed idempotente     |
 
 Scripts `db:*` usam Prisma 7.10, `packages/database/prisma.config.ts` e um único schema; os scripts da raiz preparam dependências/cliente necessários. Seed demo é restrito a desenvolvimento/teste; SEED_ADMIN_PASSWORD obrigatório. Não redefine senha existente. SEED_PLATFORM_PROVISIONING opt-in concede apenas organizations.create, separado de roles tenant e com validade de 24 horas. Verificar o `package.json` vigente antes de executar comandos. Nunca usar comandos destrutivos de banco contra uma URL desconhecida. Depois de qualquer implementação, informar comandos realmente executados, resultados, falhas, testes não executados e seus motivos. Não afirmar que documentação foi testada como aplicação.
 
@@ -108,7 +108,7 @@ Migrations são versionadas e revisadas junto ao schema. Prisma gera alteraçõe
 
 Verificar limites dos módulos, isolamento por organização/filial, autorização do recurso, integridade referencial, concorrência, idempotência, compatibilidade de contratos, logs sem secrets e consultas com índices. Atualizar documentação e ADR quando uma decisão mudar. Não corrigir uma arquitetura por meio de dependência circular ou dependência nova sem necessidade comprovada.
 
-No estágio atual, implementar somente a fase 4 autorizada: design system, navegação e integração web com a autenticação existente. Não iniciar fase 5, contatos, pipeline, recuperação de senha ou WhatsApp sem nova solicitação. Não usar any, supressões TypeScript/ESLint, monkey patch, erro silencioso, fallback de infraestrutura, peers forçados ou exclusão de apps do build para contornar problemas. Corrigir a causa, revalidar e documentar decisões em ADR.
+No estágio atual, a fase 5 autorizada compreende somente clientes, empresas e tags. Não iniciar fase 6, leads, pipeline, recuperação de senha ou WhatsApp sem nova solicitação. Não usar any, supressões TypeScript/ESLint, monkey patch, erro silencioso, fallback de infraestrutura, peers forçados ou exclusão de apps do build para contornar problemas. Corrigir a causa, revalidar e documentar decisões em ADR.
 
 ## Fundação organizacional implementada
 
@@ -131,6 +131,19 @@ Organizations usa camadas domain/application/infrastructure/presentation; owns O
 - Leia ADR-013 e docs/DESIGN_SYSTEM.md. Primitives/tokens ficam em packages/ui; não duplicar em apps/web/components/ui. Components.json registra o workspace shadcn/new-york. Usar tokens semânticos e Lucide.
 - Páginas/layouts são Server Components; interação em components/layout, components/navigation e features/auth. Não serializar credenciais nem dados privados em RSC pelo gate de UX. Backend autoriza dados.
 - ApiClient é a única camada fetch. SessionClient é o único proprietário de access em memória; AuthProvider/useSyncExternalStore só distribui estado. Refresh single-flight + Web Locks, BroadcastChannel sem tokens; não criar segunda implementação de auth/BFF/storage. Falhas de infraestrutura aparecem em estado de erro.
-- Can/usePermission usa context.permissions do backend como indicação de ação, sem reproduzir scopes ou inferir permissões pelo papel. Mudança de membership/identidade cancela requests e descarta dados anteriores. TanStack Query só entra quando houver dados interativos, com isolamento/limpeza do ADR-009.
+- Can/usePermission usa context.permissions do backend como indicação de ação, sem reproduzir scopes ou inferir permissões pelo papel. Mudança de membership/identidade cancela requests e descarta dados anteriores. TanStack Query já gerencia dados comerciais conforme ADR-009/014: keys com organização, membership e cacheScopeKey; Client descartado na troca de contexto. Access continua pertencendo somente a SessionClient.
 - pnpm test inclui DOM frontend; pnpm test:e2e constrói e executa Playwright com API/PostgreSQL/Redis reais isolados. Requer Docker, Chromium e portas frontend/API livres. Pode usar PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH para browser instalado. No CI, instalar Chromium via Playwright. Não salvar traces/storageState com credenciais.
 - Playwright usa somente seu projeto Compose descartável e remove seus próprios volumes. .runtime/browser-fixture.json é privado, 0600/ignorado e removido ao encerrar. Capturas .runtime são somente revisão local, nunca Git.
+
+## Fundação comercial — fase 5
+
+- Leia ADR-014. Contact/Company exigem branchId e ownerMembershipId; a FK composta aponta a MembershipBranch. Company é cliente B2B, nunca tenant. Não permitir owner User global nem associação entre organizações.
+- Contacts consulta gateways públicos de Companies, Tags e Organizations. Queries/transações Prisma ficam nos repositories/gateways de infrastructure; não mover Prisma para controllers, application ou contratos.
+- Toda ação comercial usa sua própria permission+scope. Reatribuição exige update e assign nas origens/destinos; filtro tenant/scope antecede keyset. Catálogo de tags é organizacional: read em grant válido, manage/ORGANIZATION.
+- Contact usa unique tenant+normalizedPhone, sem inferir DDI; e-mails comerciais não são únicos. Documentos presentes são únicos por tenant e tipo de entidade, sem regras fiscais. Tag usa tenant+normalizedName. Alterar essas políticas exige documentar decisão e revalidar corridas.
+- PATCH/DELETE exigem expectedVersion. DELETE desativa, preservando relações e chaves; transferências criam histórico mínimo na mesma transação. Não substituir essa integridade por logs, find-then-insert ou updates sem versão.
+- API/web usam DTOs explícitos, Zod estrito e campos Prisma mapeados. Não aceitar campos internos nem substituir relações ocultas com NULL só porque a resposta omitiu seus detalhes.
+- Listas e lookups são paginados, limite máximo 100. Projeções batched sem N+1; parâmetros de busca e sort são permitidos explicitamente. Interfaces não reimplementam scopes.
+- cacheScopeKey é metadado servidor de grants/filiais para invalidar cache quando o contexto atualizado chega; não é credencial nem autorização. Contratos estritos exigem release coordenado API/web.
+- Seed atualiza catálogo e templates da demo idempotentemente, sem criar clientes/empresas/tags fictícios e sem conceder privilégios globais a outros tenants. Migrations contêm somente estrutura/constraints.
+- Fixtures e screenshots comerciais são sintéticos/isolados e ignorados pelo Git. Não antecipar módulos futuros, auditoria completa, eventos, filas comerciais ou outbox sem consumidor.
