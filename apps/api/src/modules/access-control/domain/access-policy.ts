@@ -20,8 +20,12 @@ export type TenantContext = {
   branches: { id: string; code: string; name: string }[];
   grants: Grant[];
 };
+export type ResourceContext = Pick<
+  TenantContext,
+  'organizationId' | 'membershipId' | 'branches' | 'grants'
+>;
 export function permits(
-  context: TenantContext,
+  context: ResourceContext,
   permission: PermissionCode,
   resource: { branchId?: string; ownerMembershipId?: string } = {},
 ): boolean {
@@ -42,11 +46,15 @@ export function permits(
     return grant.branchIds.includes(resource.branchId);
   });
 }
-export function orgPermission(context: TenantContext, permission: PermissionCode) {
+export function orgPermission(context: ResourceContext, permission: PermissionCode) {
   if (!permits(context, permission))
     throw new ApplicationError('FORBIDDEN', 'Permission and organization scope required.');
 }
-export function collectionScope(context: TenantContext, permission: PermissionCode) {
+export function collectionScope(
+  context: ResourceContext,
+  permission: PermissionCode,
+  required = true,
+) {
   const grants = context.grants.filter((grant) => grant.permissions.includes(permission));
   const organization = grants.some((grant) => grant.scope === 'ORGANIZATION');
   const own = grants.some((grant) => grant.scope === 'OWN');
@@ -58,7 +66,7 @@ export function collectionScope(context: TenantContext, permission: PermissionCo
         .flatMap((grant) => grant.branchIds),
     ),
   ].filter((id) => allowed.has(id));
-  if (!organization && !own && branchIds.length === 0)
+  if (required && !organization && !own && branchIds.length === 0)
     throw new ApplicationError('FORBIDDEN', 'Permission required.');
   return { organization, own, branchIds };
 }

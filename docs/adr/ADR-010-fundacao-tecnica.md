@@ -1,6 +1,6 @@
 # ADR-010 — Fundação técnica, versões e execução local
 
-Status: implementado na fase 1. Data: 2026-10-06.
+Status: implementado na fase 1. Data: 2026-10-06. Complementado pelo ADR-016 na fase 7: o worker de lembretes passa a exigir PostgreSQL e o shutdown drena consumidores antes de encerrar Prisma.
 
 ## Context
 

@@ -44,6 +44,17 @@ export class OrganizationsAccessGateway {
       },
     });
   }
+  async deliveryContext(
+    transaction: DatabaseTransaction,
+    organizationId: string,
+    membershipId: string,
+  ) {
+    const member = await transaction.organizationMembership.findFirst({
+      where: { id: membershipId, organizationId },
+      select: { userId: true },
+    });
+    return member ? this.context(member.userId, membershipId, transaction) : null;
+  }
   async seed(transaction: DatabaseTransaction, userId: string) {
     const organizationId = '9b150a17-f00e-4f2c-8730-513ff1fc9801';
     await transaction.infrastructureMetadata.upsert({

@@ -37,6 +37,28 @@ export class AccessRepository {
       transaction,
     );
     if (!member) throw new ApplicationError('FORBIDDEN', 'Organization context unavailable.');
+    return {
+      ...(await this.memberGrants(member, transaction)),
+      sessionId: principal.sessionId,
+      contextVersion: principal.contextVersion,
+    };
+  }
+  async deliveryContext(
+    transaction: DatabaseTransaction,
+    organizationId: string,
+    membershipId: string,
+  ) {
+    const member = await this.organizations.deliveryContext(
+      transaction,
+      organizationId,
+      membershipId,
+    );
+    return member ? this.memberGrants(member, transaction) : null;
+  }
+  private async memberGrants(
+    member: NonNullable<Awaited<ReturnType<OrganizationsAccessGateway['context']>>>,
+    transaction: DatabaseTransaction,
+  ) {
     const assignments = await transaction.userRole.findMany({
       where: {
         organizationId: member.organizationId,
@@ -50,9 +72,7 @@ export class AccessRepository {
       orderBy: { id: 'asc' },
     });
     return {
-      userId: principal.userId,
-      sessionId: principal.sessionId,
-      contextVersion: principal.contextVersion,
+      userId: member.userId,
       membershipId: member.id,
       organizationId: member.organizationId,
       organizationName: member.organization.name,

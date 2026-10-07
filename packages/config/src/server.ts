@@ -65,7 +65,7 @@ export function parseApiEnvironment(input: EnvironmentInput) {
   return { ...parse(api, input), role: 'api' as const };
 }
 export function parseWorkerEnvironment(input: EnvironmentInput) {
-  return { ...parse(common, input), role: 'worker' as const };
+  return { ...parse(common.extend(database.shape), input), role: 'worker' as const };
 }
 export function parseDatabaseEnvironment(input: EnvironmentInput) {
   return parse(database, input);

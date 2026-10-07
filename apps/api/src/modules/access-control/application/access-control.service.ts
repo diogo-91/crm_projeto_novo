@@ -14,6 +14,9 @@ export class AccessControlService {
   context(principal: Principal) {
     return this.repository.context(principal);
   }
+  deliveryContext(transaction: DatabaseTransaction, organizationId: string, membershipId: string) {
+    return this.repository.deliveryContext(transaction, organizationId, membershipId);
+  }
   platform(principal: Principal, permission: PermissionCode, transaction?: DatabaseTransaction) {
     return this.repository.platform(principal, permission, transaction);
   }

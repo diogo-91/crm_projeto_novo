@@ -1,6 +1,6 @@
 # CRM — fundação, autenticação e cadastros comerciais
 
-Monorepo pnpm/Turborepo com web Next.js, API NestJS e worker Nest Application Context. A fase 2 acrescenta Organization, Branch, User global e memberships à infraestrutura existente. A fase 3 implementa autenticação e RBAC; todos os endpoints administrativos exigem sessão e autorização. A fase 4 implementa sessão web/layout/design system; a fase 5 adiciona clientes, empresas e tags funcionais. ADR-012 encerra a exceção de API aberta do ADR-011. Leia AGENTS.md e os documentos de arquitetura antes de contribuir.
+Monorepo pnpm/Turborepo com web Next.js, API NestJS e worker Nest Application Context. A fase 2 acrescenta Organization, Branch, User global e memberships à infraestrutura existente. A fase 3 implementa autenticação e RBAC; todos os endpoints administrativos exigem sessão e autorização. A fase 4 implementa sessão web/layout/design system; a fase 5 adiciona clientes, empresas e tags funcionais. A fase 6 implementa vendas/pipeline; a fase 7 acrescenta tarefas, timeline e lembretes reais. ADR-012 encerra a exceção de API aberta do ADR-011. Leia AGENTS.md e os documentos de arquitetura antes de contribuir.
 
 ## Requisitos
 
@@ -46,13 +46,13 @@ Estes endereços são instruções para executar o projeto **localmente**, não 
 
 ## Configuração
 
-O parsing de processos está centralizado em `@crm/config/server` e o parsing público web em `@crm/config/web`. A API/worker validam ao inicializar; os erros listam nomes dos campos inválidos, nunca valores. Variáveis específicas da API/DB não são exigidas no worker técnico, que neste momento só consome Redis/BullMQ. `.env` é carregado uma vez pelos comandos da raiz via dotenv-cli; não há cópias do arquivo em cada aplicação.
+O parsing de processos está centralizado em `@crm/config/server` e o parsing público web em `@crm/config/web`. A API/worker validam ao inicializar; os erros listam nomes dos campos inválidos, nunca valores. Variáveis específicas da API, como JWT_SECRET, não são exigidas no worker. Desde a fase 7, DATABASE_URL é obrigatória para o worker de lembretes, além de Redis/BullMQ. `.env` é carregado uma vez pelos comandos da raiz via dotenv-cli; não há cópias do arquivo em cada aplicação.
 
 | Variável                                        | Uso                                                                                              |
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | NODE_ENV                                        | development/test/production; obrigatória para API/worker                                         |
 | API_PORT                                        | porta da API, inteiro 1–65535                                                                    |
-| DATABASE_URL                                    | PostgreSQL válido, requerido API e ferramentas Prisma                                            |
+| DATABASE_URL                                    | PostgreSQL válido, requerido API, worker de lembretes e ferramentas Prisma                       |
 | REDIS_HOST / REDIS_PORT                         | conexão Redis, obrigatórias API/worker                                                           |
 | REDIS_PASSWORD                                  | opcional na biblioteca quando a instalação não exige senha; **obrigatória no Compose fornecido** |
 | CORS_ORIGINS                                    | lista de origens HTTP(S) separadas por vírgula, sem path, slash final ou wildcard                |
@@ -360,3 +360,37 @@ As validações continuam `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm test
 Evidência de **2026-10-07**: instalação congelada, lint, typecheck, test, test:integration, build e test:e2e passaram. **334 testes**: 202 unitários (65 frontend/DOM incluídos), 10 HTTP, 96 integrações reais PostgreSQL/Redis e 26 jornadas E2E Chromium. Os 270 cenários anteriores foram preservados. Sete migrations aplicadas desde zero e seed repetido nos bancos isolados; atualização incremental do banco local e seed duas vezes sem reset ou dados comerciais fictícios. Corridas de conversão/movimentação entre atores diferentes, FKs e scopes tenant/filial/carteira, rollback, decimal, configuração de etapas e histórico atômico passaram.
 
 pnpm dev iniciou web/API/worker; health/live/ready, Swagger/OpenAPI, login/contexto/logout, seis páginas/listas autenticadas e job técnico pelo worker foram conferidos. Navegador em desenvolvimento sem erros de aplicação/hydration; jornadas E2E com axe e 375/768/1024/1440/1920px. Logs e 32 artefatos JavaScript públicos conferidos sem secrets locais; .env 0600/ignorado. CI mantém seus checks e executa as suites ampliadas; execução remota não foi verificada nesta sessão. Sem alteração de dependências ou configuração de ambiente. Nenhuma dívida técnica consciente introduzida nesta etapa. Não foram utilizados remendos ou workarounds. A fase 6 está concluída; a fase 7 exige nova solicitação.
+
+## Tarefas, follow-ups, timeline e notificações — fase 7
+
+Atualizar banco local: `pnpm db:migrate` e `pnpm db:seed`, preservando volumes. A migration `20261007200000_create_tasks_activities_reminders` eleva o histórico a oito migrations. Seed atualiza somente demo e catálogo (44 permissões), sem tarefas/interações/notificações fictícias. Não há novos serviços nem secrets: **worker agora exige DATABASE_URL**, além de Redis, para ler checkpoints e entregar notificações. Execute os três processos com `pnpm dev`; fila notifications é consumida pelo worker separado.
+
+Web: `/tasks` possui lista filtrada/paginada, criação e detalhes `/tasks/:id`. Clientes, leads e oportunidades têm Timeline, Registrar interação e Novo follow-up. Tarefas podem não possuir alvo; interações exigem um Contact/Lead/Opportunity. Concluir, reabrir, editar e arquivar usam versão. Vencimento e lembrete são apresentados no fuso do navegador; Hoje usa o dia local, incluindo mudanças de horário de verão. Lembrete exige vencimento e ocorre até ele. Não há recorrência, calendário externo ou lembretes WhatsApp.
+
+Endpoints abaixo usam bearer e contexto selecionado, com DTOs estritos, scopes por ação e Swagger real:
+
+| Método               | Rota em `/api/v1`                                        | Comportamento                                             |
+| -------------------- | -------------------------------------------------------- | --------------------------------------------------------- |
+| POST / GET           | `/tasks`                                                 | criar / listar tarefas autorizadas                        |
+| GET                  | `/tasks/assignment-branches`, `/tasks/assignment-owners` | destinos autorizados e paginados por ação                 |
+| GET / PATCH / DELETE | `/tasks/:id`                                             | consultar / alterar / arquivar com expectedVersion        |
+| POST                 | `/tasks/:id/complete`, `/tasks/:id/reopen`               | concluir / reabrir com expectedVersion                    |
+| GET                  | `/tasks/:id/history`                                     | histórico mínimo paginado                                 |
+| GET                  | `/tasks/:id/reminder`                                    | último checkpoint e código seguro, sem payload de job     |
+| POST                 | `/tasks/:id/reminder-retry`                              | reapresentar falha definitiva, autorizado e versionado    |
+| POST                 | `/activities`                                            | registrar interação manual com alvo explícito             |
+| GET                  | `/activities/:type/:id/timeline`                         | type contact/lead/opportunity; agregar fontes autorizadas |
+| GET                  | `/notifications`                                         | caixa privada da membership selecionada                   |
+| POST                 | `/notifications/:id/read`                                | marcar aviso próprio como lido, idempotentemente          |
+
+Filtros Task: busca por título/descrição, active/status/kind/priority, filial/responsável, intervalo UTC from/until, alvo type+ID e due overdue/today/upcoming. Today direto na API é UTC; web envia intervalo local convertido. Paginação keyset tem limite máximo 100. Tarefa vinculada exige leitura atual do alvo; a ligação nunca amplia escopo. Notification continua privada mesmo para ADMIN/ORGANIZATION e também revalida visibilidade da tarefa/alvo.
+
+### Operação de lembretes
+
+Request grava tarefa/histórico/TaskReminder em uma transação PostgreSQL, sem Redis na request. Worker reconcilia lotes de 25 a cada 15s e usa leases de 60s, BullMQ notifications com concorrência 4, cinco tentativas e backoff exponencial com jitter limitado a 60s. Deduplicação e checkpoint final estão no PostgreSQL. Notificação + COMPLETED são atômicos. Perda de jobs/Redis ou crash do dispatcher é recuperada por lease/reconciliação; réplica concorrente usa SKIP LOCKED. O fuso é de apresentação, agendamento usa UTC.
+
+Atraso é possível durante indisponibilidade. Logs estruturados mostram pending/failed/lagMs e jobId; status por tarefa exibe PENDING/DISPATCHED/COMPLETED/CANCELED/FAILED. Após corrigir infraestrutura, FAILED pode ser reapresentado pelo detalhe da tarefa ou endpoint reminder-retry, sem nova identidade nem adiantamento do horário. Job com contrato inválido falha permanentemente; banco preserva intenções válidas. Failed set BullMQ retém até 1000 jobs e conclusão até 100; não remover checkpoints PostgreSQL para limpar fila. Não há ferramenta externa de alerta ou promessa de SLA nesta etapa. Shutdown drena consumidores antes de desconectar Prisma.
+
+Validação: `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm test:integration`, `pnpm build`, `pnpm test:e2e`. Integração/E2E usam PostgreSQL/Redis/worker reais descartáveis. Uma constraint temporária **somente no banco isolado de teste** provoca falhas reais de entrega para comprovar rollback, cinco retries e replay; é removida no finally. Nenhuma alteração operacional de produção é feita por testes. ADR-016 descreve decisões e limites; a fase 8 permanece fora do escopo.
+
+Evidência final de **2026-10-07**: instalação congelada, lint, typecheck, test, test:integration, build e test:e2e passaram. **383 testes**: 223 unitários (75 frontend/DOM incluídos), 10 HTTP, 118 integrações reais e 32 E2E. Todos os 334 cenários anteriores foram mantidos. Oito migrations aplicadas desde zero, seed idempotente, isolamento/scopes/IDOR, concorrência/histórico, UTC/DST e precisão de datas, recuperação Redis/lease, cinco falhas com rollback e replay foram verificados. Browser real passou jornada e cinco larguras com axe/foco. Atualização do banco local e seed duas vezes preservaram IDs/timestamps/credenciais/dados sem tarefas/interações/notificações fictícias. pnpm dev confirmou três processos, health/live/ready, Swagger, APIs autenticadas, job técnico e tarefas/formulário/notificações em 375/1440px sem erros de aplicação/hydration. Shutdown drenou o consumidor antes de encerrar Prisma. Foram conferidos 103 artefatos JavaScript públicos e 21 logs sem secrets do servidor; .env permanece 0600/ignorado e fixtures E2E foram removidas. CI existente executa as suites ampliadas; sua execução remota não foi verificada nesta sessão. Nenhuma funcionalidade da fase 8 foi iniciada.

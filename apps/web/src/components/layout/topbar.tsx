@@ -1,4 +1,5 @@
 'use client';
+import { NotificationsInbox } from '@/features/tasks/notifications-inbox';
 import { usePathname } from 'next/navigation';
 import { Menu, LogOut, ChevronDown, Store } from 'lucide-react';
 import {
@@ -54,6 +55,7 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
       </div>
       <div className="flex min-w-0 max-w-full flex-1 items-center justify-end gap-2 md:gap-4">
         <CommandMenu />
+        <NotificationsInbox />
         <div className="min-w-0 max-w-52">
           <OrganizationSwitcher />
           {branch && (

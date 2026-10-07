@@ -44,6 +44,10 @@
     "./runtime": {
       "types": "./dist/modules/runtime/index.d.ts",
       "default": "./dist/modules/runtime/index.js"
+    },
+    "./task-reminders": {
+      "types": "./dist/modules/tasks/task-reminders.module.d.ts",
+      "default": "./dist/modules/tasks/task-reminders.module.js"
     }
   },
   "type": "module"

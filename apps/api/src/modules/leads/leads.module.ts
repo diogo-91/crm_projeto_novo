@@ -1,3 +1,4 @@
+import { LeadsLookupGateway } from './infrastructure/leads-lookup.gateway.js';
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../database/database.module.js';
 import { AccessControlModule } from '../access-control/index.js';
@@ -18,6 +19,7 @@ import { LeadsRepository } from './infrastructure/leads.repository.js';
     OpportunitiesModule,
   ],
   controllers: [LeadsController],
-  providers: [LeadsService, LeadsRepository],
+  providers: [LeadsService, LeadsRepository, LeadsLookupGateway],
+  exports: [LeadsLookupGateway],
 })
 export class LeadsModule {}

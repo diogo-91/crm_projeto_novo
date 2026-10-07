@@ -1,3 +1,5 @@
+import type { TimelineEntry } from '@crm/contracts';
+import type { TimelineQuery } from '@crm/contracts';
 import { currencySchema } from '@crm/contracts';
 import { Inject, Injectable } from '@nestjs/common';
 import type {
@@ -129,6 +131,14 @@ export class OpportunitiesRepository {
     });
     if (!row) throw new ApplicationError('RESOURCE_NOT_FOUND', 'Opportunity unavailable.');
     return this.response(tx, context, row);
+  }
+  async target(tx: DatabaseTransaction, context: TenantContext, id: string) {
+    const row = await tx.opportunity.findFirst({
+      where: { AND: [commercialScope(context, 'opportunities.read'), { id }] },
+      select: { id: true, name: true, branchId: true, ownerMembershipId: true, active: true },
+    });
+    if (!row) throw new ApplicationError('RESOURCE_NOT_FOUND', 'Target unavailable.');
+    return row;
   }
   async list(context: TenantContext, query: OpportunityListQuery) {
     const tx = this.database.client;
@@ -440,6 +450,38 @@ export class OpportunitiesRepository {
       })),
       query.limit,
     );
+  }
+  async timeline(
+    tx: DatabaseTransaction,
+    context: TenantContext,
+    id: string,
+    query: TimelineQuery,
+  ): Promise<TimelineEntry[]> {
+    const rows = await tx.opportunityStageHistory.findMany({
+      where: {
+        AND: [
+          {
+            organizationId: context.organizationId,
+            opportunityId: id,
+            opportunity: { is: commercialScope(context, 'opportunities.read') },
+          },
+          cursorFilter({ ...query, sort: 'createdAt', direction: 'desc' }, 'occurredAt'),
+        ],
+      },
+      orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+      take: query.limit + 1,
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      type: 'STAGE',
+      name: row.toStageName,
+      description: row.fromStageName
+        ? `${row.fromStageName} → ${row.toStageName}`
+        : row.toStageName,
+      taskId: null,
+      createdAt: row.occurredAt.toISOString(),
+      updatedAt: row.occurredAt.toISOString(),
+    }));
   }
   async labelsByLead(tx: DatabaseTransaction, context: TenantContext, leadIds: string[]) {
     if (!context.grants.some((grant) => grant.permissions.includes('opportunities.read')))

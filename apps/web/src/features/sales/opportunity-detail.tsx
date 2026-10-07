@@ -1,4 +1,5 @@
 'use client';
+import { Timeline } from '@/features/tasks/timeline';
 import { useState } from 'react';
 import Link from 'next/link';
 import { Button, Badge, EmptyState } from '@crm/ui';
@@ -131,6 +132,7 @@ export function OpportunityDetail({ id }: { id: string }) {
           </Button>
         )}
       </section>
+      <Timeline target={{ type: 'opportunity', id: row.id }} active={row.active} />
       <RecordDialog open={moving} onOpenChange={setMoving} title="Mover oportunidade">
         {moving && <MoveForm key={row.version} record={row} onSaved={() => setMoving(false)} />}
       </RecordDialog>

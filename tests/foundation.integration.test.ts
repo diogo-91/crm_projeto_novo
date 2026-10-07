@@ -1,3 +1,5 @@
+import type { TimelineEntry } from '@crm/contracts';
+import { Queue } from 'bullmq';
 import { SignJWT, decodeJwt } from 'jose';
 import { Redis } from 'ioredis';
 import { createHash } from 'node:crypto';
@@ -12,6 +14,13 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createDatabaseClient } from '@crm/database';
 import type { DatabaseClient } from '@crm/database';
 import {
+  taskResponseSchema,
+  taskListResponseSchema,
+  activityResponseSchema,
+  timelineResponseSchema,
+  notificationListResponseSchema,
+  notificationResponseSchema,
+  reminderStatusSchema,
   leadResponseSchema,
   leadListResponseSchema,
   opportunityResponseSchema,
@@ -84,8 +93,12 @@ function start(path: string) {
   children.push(child);
   return child;
 }
-async function until(condition: () => Promise<boolean>, description: string): Promise<void> {
-  const deadline = Date.now() + 20000;
+async function until(
+  condition: () => Promise<boolean>,
+  description: string,
+  timeoutMs = 20000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await condition()) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -704,7 +717,7 @@ it('Swagger documents implemented organizational contracts with bearer security 
   );
 });
 
-it('database migration history on an empty PostgreSQL contains all seven successful immutable migrations', async () => {
+it('database migration history on an empty PostgreSQL contains all eight successful immutable migrations', async () => {
   const migrations = await db().$queryRaw<
     { migration_name: string; finished_at: Date | null; rolled_back_at: Date | null }[]
   >`SELECT migration_name, finished_at, rolled_back_at FROM "_prisma_migrations" ORDER BY migration_name`;
@@ -716,6 +729,7 @@ it('database migration history on an empty PostgreSQL contains all seven success
     '20261007120000_create_contacts_companies_tags',
     '20261007123000_create_assignment_history',
     '20261007150000_create_leads_pipelines_opportunities',
+    '20261007200000_create_tasks_activities_reminders',
   ]);
   expect(migrations.every((row) => row.finished_at !== null && row.rolled_back_at === null)).toBe(
     true,
@@ -2865,4 +2879,709 @@ it('sales customer links and assignment histories retain tenant integrity and tr
   expect(
     await db().opportunityAssignmentHistory.count({ where: { opportunityId: record.id } }),
   ).toBe(1);
+});
+
+async function taskFixture(
+  f: Awaited<ReturnType<typeof commercialFixture>>,
+  overrides: Record<string, unknown> = {},
+) {
+  const result = await authenticated('/tasks', f.token, {
+    name: 'Synthetic follow-up',
+    branchId: f.a.id,
+    ownerMembershipId: f.owner.id,
+    kind: 'FOLLOW_UP',
+    ...overrides,
+  });
+  expect(result.status).toBe(201);
+  return taskResponseSchema.parse(await result.json());
+}
+async function taskOwnerToken(f: Awaited<ReturnType<typeof commercialFixture>>) {
+  await assign(f.org.id, f.owner.id, 'SELLER', 'OWN');
+  return (await login(f.owner.user.email)).body.accessToken;
+}
+function reminderQueue() {
+  return new Queue('notifications', {
+    connection: {
+      host: environment['REDIS_HOST'] ?? '127.0.0.1',
+      port: Number(environment['REDIS_PORT']),
+      password: environment['REDIS_PASSWORD'] ?? '',
+      maxRetriesPerRequest: 1,
+    },
+  });
+}
+it('tasks validate strict payloads, explicit UTC dates and technical Swagger contracts', async () => {
+  const f = await commercialFixture();
+  for (const payload of [
+    { organizationId: f.org.id },
+    { status: 'COMPLETED' },
+    { dueAt: '2026-10-07T12:00' },
+    { remindAt: '2026-10-07T12:00:00Z' },
+    { dueAt: '2026-10-07T12:00:00Z', remindAt: '2026-10-08T12:00:00Z' },
+  ])
+    expect(
+      (await authenticated('/tasks', f.token, { name: 'Bad task', branchId: f.a.id, ...payload }))
+        .status,
+    ).toBe(400);
+  const row = await taskFixture(f, { dueAt: '2026-10-07T12:00:00-03:00' });
+  expect(row.dueAt).toBe('2026-10-07T15:00:00.000Z');
+  expect(JSON.stringify(row)).not.toMatch(/organizationId|createdByMembershipId|reminderVersion/);
+  const docs: unknown = await (await fetch(url + '/docs/openapi.json')).json();
+  expect(docs).toHaveProperty('paths./api/v1/tasks/{id}/complete.post');
+  expect(docs).toHaveProperty('paths./api/v1/activities/{type}/{id}/timeline.get');
+  expect(docs).toHaveProperty('paths./api/v1/notifications/{id}/read.post');
+});
+it('task completion, reopening, edit and archive use atomic versioned history', async () => {
+  const f = await commercialFixture();
+  const row = await taskFixture(f);
+  let changed = taskResponseSchema.parse(
+    await (
+      await authenticated(`/tasks/${row.id}/complete`, f.token, { expectedVersion: row.version })
+    ).json(),
+  );
+  expect(changed.status).toBe('COMPLETED');
+  expect(changed.completedAt).not.toBeNull();
+  expect(
+    (await authenticated(`/tasks/${row.id}/reopen`, f.token, { expectedVersion: row.version }))
+      .status,
+  ).toBe(409);
+  changed = taskResponseSchema.parse(
+    await (
+      await authenticated(`/tasks/${row.id}/reopen`, f.token, { expectedVersion: changed.version })
+    ).json(),
+  );
+  expect(changed.completedAt).toBeNull();
+  changed = taskResponseSchema.parse(
+    await (
+      await authenticated(
+        `/tasks/${row.id}`,
+        f.token,
+        { expectedVersion: changed.version, name: 'Edited' },
+        'PATCH',
+      )
+    ).json(),
+  );
+  expect(
+    (
+      await authenticated(
+        `/tasks/${row.id}`,
+        f.token,
+        { expectedVersion: changed.version },
+        'DELETE',
+      )
+    ).status,
+  ).toBe(200);
+  expect(await db().taskHistory.count({ where: { taskId: row.id } })).toBe(5);
+  expect(
+    (await authenticated(`/tasks/${row.id}/complete`, f.token, { expectedVersion: 5 })).status,
+  ).toBe(409);
+});
+it('task completion races between different actors commit one event and one conflict', async () => {
+  const f = await commercialFixture();
+  const owner = await taskOwnerToken(f);
+  const row = await taskFixture(f);
+  const responses = await Promise.all([
+    authenticated(`/tasks/${row.id}/complete`, f.token, { expectedVersion: 1 }),
+    authenticated(`/tasks/${row.id}/complete`, owner, { expectedVersion: 1 }),
+  ]);
+  expect(responses.map((r) => r.status).sort()).toEqual([200, 409]);
+  expect(await db().taskHistory.count({ where: { taskId: row.id } })).toBe(2);
+});
+it('task foreign keys and checks reject cross-tenant ownership, links, histories and multiple targets', async () => {
+  const f = await commercialFixture(),
+    other = await commercialFixture();
+  const contact = await contactFixture(f),
+    foreign = await contactFixture(other);
+  const row = await taskFixture(f, { target: { type: 'contact', id: contact.id } });
+  expect(
+    (
+      await authenticated('/tasks', f.token, {
+        name: 'Cross tenant',
+        branchId: f.a.id,
+        target: { type: 'contact', id: foreign.id },
+      })
+    ).status,
+  ).toBe(404);
+  await expect(
+    db().task.update({ where: { id: row.id }, data: { contactId: foreign.id } }),
+  ).rejects.toThrow();
+  await expect(
+    db().task.update({ where: { id: row.id }, data: { ownerMembershipId: other.owner.id } }),
+  ).rejects.toThrow();
+  await expect(
+    db().taskHistory.create({
+      data: {
+        organizationId: f.org.id,
+        taskId: row.id,
+        actorMembershipId: other.owner.id,
+        name: 'Bad',
+        kind: 'UPDATED',
+        recordVersion: 2,
+      },
+    }),
+  ).rejects.toThrow();
+  const response = await authenticated('/leads', f.token, {
+    name: 'Same tenant target',
+    branchId: f.a.id,
+    ownerMembershipId: f.owner.id,
+  });
+  expect(response.status).toBe(201);
+  const lead = leadResponseSchema.parse(await response.json());
+  await expect(
+    db().task.update({ where: { id: row.id }, data: { leadId: lead.id } }),
+  ).rejects.toThrow();
+  await expect(
+    db().task.update({ where: { id: row.id }, data: { status: 'COMPLETED' } }),
+  ).rejects.toThrow();
+});
+it.each(['OWN', 'BRANCH', 'BRANCH_SET', 'ORGANIZATION'] as const)(
+  'task scope %s intersects linked resource access before pagination',
+  async (scope) => {
+    const f = await commercialFixture();
+    const mine = await taskFixture(f),
+      same = await taskFixture(f, { ownerMembershipId: f.other.id }),
+      second = await taskFixture(f, { branchId: f.b.id, ownerMembershipId: f.other.id }),
+      third = await taskFixture(f, { branchId: f.c.id, ownerMembershipId: f.other.id });
+    const target = await contactFixture(f, { ownerMembershipId: f.other.id });
+    const linked = await taskFixture(f, { target: { type: 'contact', id: target.id } });
+    await assign(
+      f.org.id,
+      f.owner.id,
+      'SELLER',
+      scope,
+      scope === 'BRANCH' ? [f.a.id] : scope === 'BRANCH_SET' ? [f.a.id, f.b.id] : [],
+    );
+    const token = (await login(f.owner.user.email)).body.accessToken;
+    const page = taskListResponseSchema.parse(
+      await (await authenticated('/tasks?limit=100', token, undefined, 'GET')).json(),
+    );
+    const ids = page.data.map((r) => r.id);
+    expect(ids).toContain(mine.id);
+    expect(ids.includes(same.id)).toBe(scope !== 'OWN');
+    expect(ids.includes(second.id)).toBe(scope === 'BRANCH_SET' || scope === 'ORGANIZATION');
+    expect(ids.includes(third.id)).toBe(scope === 'ORGANIZATION');
+    expect(ids.includes(linked.id)).toBe(scope !== 'OWN');
+    if (scope === 'OWN') {
+      expect((await authenticated(`/tasks/${linked.id}`, token, undefined, 'GET')).status).toBe(
+        404,
+      );
+      expect(
+        (await authenticated(`/tasks/${linked.id}/complete`, token, { expectedVersion: 1 })).status,
+      ).toBe(404);
+    }
+  },
+);
+it('task reassignment cannot borrow broad read authority and preserves old state on conflict', async () => {
+  const f = await commercialFixture();
+  const owner = await taskOwnerToken(f);
+  const row = await taskFixture(f);
+  expect(
+    (
+      await authenticated(
+        `/tasks/${row.id}`,
+        owner,
+        { expectedVersion: 1, ownerMembershipId: f.other.id },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(403);
+  expect((await db().task.findUniqueOrThrow({ where: { id: row.id } })).ownerMembershipId).toBe(
+    f.owner.id,
+  );
+  expect(
+    (
+      await authenticated(
+        `/tasks/${row.id}`,
+        f.token,
+        { expectedVersion: 1, branchId: f.b.id, ownerMembershipId: f.other.id },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(200);
+  expect((await authenticated(`/tasks/${row.id}`, owner, undefined, 'GET')).status).toBe(404);
+});
+it('activities require one authorized target and reject foreign tenant and mass assignment', async () => {
+  const f = await commercialFixture();
+  const owner = await taskOwnerToken(f);
+  const contact = await contactFixture(f),
+    hidden = await contactFixture(f, { ownerMembershipId: f.other.id });
+  const good = await authenticated('/activities', owner, {
+    target: { type: 'contact', id: contact.id },
+    kind: 'CALL',
+    description: ' Synthetic call ',
+  });
+  expect(good.status).toBe(201);
+  expect(activityResponseSchema.parse(await good.json()).description).toBe('Synthetic call');
+  expect(
+    (
+      await authenticated('/activities', owner, {
+        target: { type: 'contact', id: hidden.id },
+        description: 'Hidden',
+      })
+    ).status,
+  ).toBe(404);
+  expect(
+    (
+      await authenticated('/activities', owner, {
+        target: { type: 'contact', id: contact.id },
+        description: 'Bad',
+        actorMembershipId: f.other.id,
+      })
+    ).status,
+  ).toBe(400);
+  await expect(
+    db().activity.create({
+      data: {
+        organizationId: f.org.id,
+        actorMembershipId: f.owner.id,
+        kind: 'NOTE',
+        description: 'No target',
+      },
+    }),
+  ).rejects.toThrow();
+  const other = await commercialFixture();
+  const foreign = await contactFixture(other);
+  await expect(
+    db().activity.create({
+      data: {
+        organizationId: f.org.id,
+        actorMembershipId: f.owner.id,
+        kind: 'NOTE',
+        description: 'Bad',
+        contactId: foreign.id,
+      },
+    }),
+  ).rejects.toThrow();
+});
+it('timeline merges notes, tasks and stages with a stable temporal cursor and no duplicated page', async () => {
+  const f = await salesFixture();
+  const opp = await opportunityFixture(f);
+  const target = { type: 'opportunity', id: opp.id };
+  const task = await taskFixture(f, { target });
+  expect(
+    (await authenticated('/activities', f.token, { target, description: 'Deal note' })).status,
+  ).toBe(201);
+  expect(
+    (await authenticated(`/tasks/${task.id}/complete`, f.token, { expectedVersion: 1 })).status,
+  ).toBe(200);
+  expect(
+    (
+      await authenticated(`/opportunities/${opp.id}/stage`, f.token, {
+        expectedVersion: 1,
+        stageId: f.negotiation.id,
+      })
+    ).status,
+  ).toBe(200);
+  const entries: TimelineEntry[] = [];
+  let cursor: string | null = null;
+  do {
+    const page = timelineResponseSchema.parse(
+      await (
+        await authenticated(
+          `/activities/opportunity/${opp.id}/timeline?limit=2${cursor ? '&cursor=' + cursor : ''}`,
+          f.token,
+          undefined,
+          'GET',
+        )
+      ).json(),
+    );
+    entries.push(...page.data);
+    cursor = page.pageInfo.nextCursor;
+  } while (cursor);
+  expect(entries).toHaveLength(5);
+  expect(new Set(entries.map((r) => r.id)).size).toBe(5);
+  expect(new Set(entries.map((r) => r.type))).toEqual(new Set(['TASK', 'ACTIVITY', 'STAGE']));
+  const other = await commercialFixture();
+  expect(
+    (
+      await authenticated(
+        `/activities/opportunity/${opp.id}/timeline`,
+        other.token,
+        undefined,
+        'GET',
+      )
+    ).status,
+  ).toBe(404);
+});
+it('worker delivers one durable recipient notification and duplicate jobs cannot duplicate it', async () => {
+  const f = await commercialFixture();
+  const owner = await taskOwnerToken(f);
+  const now = new Date().toISOString();
+  const row = await taskFixture(f, { dueAt: now, remindAt: now });
+  await until(
+    async () => (await db().notification.count({ where: { reminder: { taskId: row.id } } })) === 1,
+    'durable notification',
+  );
+  const reminder = await db().taskReminder.findFirstOrThrow({ where: { taskId: row.id } });
+  expect(reminder.state).toBe('COMPLETED');
+  const q = reminderQueue();
+  try {
+    await q.add('duplicate', { version: 1, reminderId: reminder.id }, { jobId: randomUUID() });
+    await until(
+      async () => (await q.getActiveCount()) === 0 && (await q.getWaitingCount()) === 0,
+      'duplicate job complete',
+    );
+  } finally {
+    await q.close();
+  }
+  expect(await db().notification.count({ where: { reminderId: reminder.id } })).toBe(1);
+  const list = notificationListResponseSchema.parse(
+    await (await authenticated('/notifications', owner, undefined, 'GET')).json(),
+  );
+  expect(list.data.map((n) => n.task.id)).toContain(row.id);
+  expect(
+    notificationListResponseSchema.parse(
+      await (await authenticated('/notifications', f.token, undefined, 'GET')).json(),
+    ).data,
+  ).toEqual([]);
+  const notification = list.data.find((n) => n.task.id === row.id);
+  if (!notification) throw new Error('Notification missing');
+  const first = notificationResponseSchema.parse(
+    await (await authenticated(`/notifications/${notification.id}/read`, owner, {})).json(),
+  );
+  const second = notificationResponseSchema.parse(
+    await (await authenticated(`/notifications/${notification.id}/read`, owner, {})).json(),
+  );
+  expect(second.readAt).toBe(first.readAt);
+  expect((await authenticated(`/notifications/${notification.id}/read`, f.token, {})).status).toBe(
+    404,
+  );
+  expect(
+    (
+      await authenticated(
+        `/tasks/${row.id}`,
+        f.token,
+        { expectedVersion: 1, name: 'Renamed' },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(200);
+  expect(await db().taskReminder.count({ where: { taskId: row.id } })).toBe(1);
+});
+it('completion cancels pending reminders and reopening creates a separate durable occurrence', async () => {
+  const f = await commercialFixture();
+  await taskOwnerToken(f);
+  const future = new Date(Date.now() + 3600000).toISOString();
+  const row = await taskFixture(f, { dueAt: future, remindAt: future });
+  expect(
+    (await authenticated(`/tasks/${row.id}/complete`, f.token, { expectedVersion: 1 })).status,
+  ).toBe(200);
+  expect((await db().taskReminder.findFirstOrThrow({ where: { taskId: row.id } })).state).toBe(
+    'CANCELED',
+  );
+  expect(
+    (await authenticated(`/tasks/${row.id}/reopen`, f.token, { expectedVersion: 2 })).status,
+  ).toBe(200);
+  const reminders = await db().taskReminder.findMany({
+    where: { taskId: row.id },
+    orderBy: { scheduledVersion: 'asc' },
+  });
+  expect(reminders.map((r) => r.state)).toEqual(['CANCELED', 'PENDING']);
+});
+it('reconciler recovers expired dispatch after Redis work disappears, without duplication', async () => {
+  const f = await commercialFixture();
+  await taskOwnerToken(f);
+  const future = new Date(Date.now() + 3600000).toISOString();
+  const row = await taskFixture(f, { dueAt: future, remindAt: future });
+  const reminder = await db().taskReminder.findFirstOrThrow({ where: { taskId: row.id } });
+  await db().task.update({
+    where: { id: row.id },
+    data: { remindAt: new Date(Date.now() - 1000) },
+  });
+  await db().taskReminder.update({
+    where: { id: reminder.id },
+    data: {
+      state: 'DISPATCHED',
+      availableAt: new Date(Date.now() - 1000),
+      leaseToken: randomUUID(),
+      leaseUntil: new Date(Date.now() - 1000),
+    },
+  });
+  await until(
+    async () => (await db().notification.count({ where: { reminderId: reminder.id } })) === 1,
+    'reconciled missing Redis work',
+  );
+  expect((await db().taskReminder.findUniqueOrThrow({ where: { id: reminder.id } })).state).toBe(
+    'COMPLETED',
+  );
+});
+it('revoked target visibility cancels delivery and hides an existing notification immediately', async () => {
+  const f = await commercialFixture();
+  const owner = await taskOwnerToken(f);
+  const now = new Date().toISOString();
+  const row = await taskFixture(f, { dueAt: now, remindAt: now });
+  await until(
+    async () => (await db().notification.count({ where: { reminder: { taskId: row.id } } })) === 1,
+    'first recipient delivery',
+  );
+  const contact = await contactFixture(f, { ownerMembershipId: f.other.id });
+  expect(
+    (
+      await authenticated(
+        `/tasks/${row.id}`,
+        f.token,
+        { expectedVersion: 1, target: { type: 'contact', id: contact.id } },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(200);
+  expect(
+    notificationListResponseSchema.parse(
+      await (await authenticated('/notifications', owner, undefined, 'GET')).json(),
+    ).data,
+  ).toEqual([]);
+  await until(
+    async () =>
+      (await db().taskReminder.count({ where: { taskId: row.id, state: 'CANCELED' } })) === 1,
+    'visibility-revoked reminder cancellation',
+  );
+}, 60000);
+it('failed reminder replay is authorized, preserves its identity and allows one local effect', async () => {
+  const f = await commercialFixture();
+  const owner = await taskOwnerToken(f);
+  const future = new Date(Date.now() + 3600000).toISOString();
+  const row = await taskFixture(f, { dueAt: future, remindAt: future });
+  const reminder = await db().taskReminder.findFirstOrThrow({ where: { taskId: row.id } });
+  await db().task.update({
+    where: { id: row.id },
+    data: { remindAt: new Date(Date.now() - 1000) },
+  });
+  await db().taskReminder.update({
+    where: { id: reminder.id },
+    data: { state: 'FAILED', attemptCount: 5, lastErrorCode: 'DELIVERY_UNAVAILABLE' },
+  });
+  expect(
+    reminderStatusSchema.parse(
+      await (await authenticated(`/tasks/${row.id}/reminder`, owner, undefined, 'GET')).json(),
+    )?.state,
+  ).toBe('FAILED');
+  expect(
+    (await authenticated(`/tasks/${row.id}/reminder-retry`, owner, { expectedVersion: 9 })).status,
+  ).toBe(409);
+  expect(
+    (await authenticated(`/tasks/${row.id}/reminder-retry`, owner, { expectedVersion: 1 })).status,
+  ).toBe(200);
+  expect(
+    (await authenticated(`/tasks/${row.id}/reminder-retry`, owner, { expectedVersion: 1 })).status,
+  ).toBe(409);
+  await until(
+    async () => (await db().notification.count({ where: { reminderId: reminder.id } })) === 1,
+    'replayed reminder',
+  );
+  const stored = await db().taskReminder.findUniqueOrThrow({ where: { id: reminder.id } });
+  expect(stored.state).toBe('COMPLETED');
+  expect(stored.attemptCount).toBe(0);
+  await expect(
+    db().notification.create({
+      data: {
+        organizationId: f.org.id,
+        reminderId: reminder.id,
+        recipientMembershipId: f.other.id,
+      },
+    }),
+  ).rejects.toThrow();
+});
+it('a Redis outage leaves a committed reminder recoverable instead of losing its intent', async () => {
+  const f = await commercialFixture();
+  await taskOwnerToken(f);
+  await compose('pause', 'redis');
+  let taskId: string;
+  try {
+    const now = new Date().toISOString(),
+      row = await taskFixture(f, { dueAt: now, remindAt: now });
+    taskId = row.id;
+    expect(
+      await db().taskReminder.count({
+        where: { taskId, state: { in: ['PENDING', 'DISPATCHED'] } },
+      }),
+    ).toBe(1);
+    expect(await db().notification.count({ where: { reminder: { taskId } } })).toBe(0);
+  } finally {
+    await compose('unpause', 'redis');
+  }
+  await until(
+    async () => (await db().notification.count({ where: { reminder: { taskId } } })) === 1,
+    'Redis recovery and eventual delivery',
+  );
+});
+it('invalid BullMQ payloads fail permanently without retrying or creating a notification', async () => {
+  const q = reminderQueue();
+  const jobId = randomUUID();
+  try {
+    await q.add(
+      'invalid-contract',
+      { version: 9, reminderId: randomUUID() },
+      { jobId, attempts: 5, backoff: { type: 'exponential', delay: 1000 } },
+    );
+    await until(
+      async () => (await q.getJob(jobId))?.getState().then((state) => state === 'failed') ?? false,
+      'permanent invalid job failure',
+    );
+    const job = await q.getJob(jobId);
+    expect(job?.attemptsMade).toBe(1);
+    expect(job?.failedReason).toBe('Invalid reminder job contract');
+  } finally {
+    await q.close();
+  }
+});
+it('five real delivery failures persist a replayable failure and retry produces one notification', async () => {
+  const f = await commercialFixture();
+  const owner = await taskOwnerToken(f);
+  const future = new Date(Date.now() + 3600000).toISOString();
+  const row = await taskFixture(f, { dueAt: future, remindAt: future });
+  const intent = await db().taskReminder.findFirstOrThrow({ where: { taskId: row.id } });
+  // Fault injection in this disposable database: the real worker insert must fail and roll back.
+  await db()
+    .$executeRaw`ALTER TABLE notifications ADD CONSTRAINT notification_delivery_fault CHECK (false) NOT VALID`;
+  try {
+    await db().task.update({
+      where: { id: row.id },
+      data: { remindAt: new Date(Date.now() - 1000) },
+    });
+    await db().taskReminder.update({
+      where: { id: intent.id },
+      data: { availableAt: new Date(Date.now() - 1000) },
+    });
+    await until(
+      async () =>
+        (await db().taskReminder.findUniqueOrThrow({ where: { id: intent.id } })).state ===
+        'FAILED',
+      'five real retries',
+      50000,
+    );
+    const failed = await db().taskReminder.findUniqueOrThrow({ where: { id: intent.id } });
+    expect(failed.attemptCount).toBe(5);
+    expect(failed.lastErrorCode).toBe('DELIVERY_UNAVAILABLE');
+    const q = reminderQueue();
+    try {
+      await until(
+        async () =>
+          (await q.getJob(intent.id))?.getState().then((state) => state === 'failed') ?? false,
+        'queue failure checkpoint',
+      );
+      expect((await q.getJob(intent.id))?.failedReason).toBe('Reminder delivery failed');
+    } finally {
+      await q.close();
+    }
+    expect(await db().notification.count({ where: { reminderId: intent.id } })).toBe(0);
+  } finally {
+    await db().$executeRaw`ALTER TABLE notifications DROP CONSTRAINT notification_delivery_fault`;
+  }
+  expect(
+    (await authenticated(`/tasks/${row.id}/reminder-retry`, owner, { expectedVersion: 1 })).status,
+  ).toBe(200);
+  await until(
+    async () => (await db().notification.count({ where: { reminderId: intent.id } })) === 1,
+    'successful durable replay',
+  );
+}, 80000);
+it('task due-date filters use explicit UTC intervals and apply search before pagination', async () => {
+  const f = await commercialFixture(),
+    now = new Date(),
+    start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const yesterday = await taskFixture(f, {
+      name: 'Yesterday',
+      dueAt: new Date(start.getTime() - 3600000).toISOString(),
+    }),
+    today = await taskFixture(f, {
+      name: 'Today',
+      dueAt: start.toISOString(),
+      description: 'distinct-search-text',
+    }),
+    tomorrow = await taskFixture(f, {
+      name: 'Tomorrow',
+      dueAt: new Date(start.getTime() + 86400000).toISOString(),
+    });
+  await taskFixture(f);
+  const list = async (query: string) =>
+    taskListResponseSchema
+      .parse(await (await authenticated('/tasks?' + query, f.token, undefined, 'GET')).json())
+      .data.map((row) => row.id);
+  expect(await list('due=today')).toEqual([today.id]);
+  expect(new Set(await list('due=overdue'))).toEqual(new Set([yesterday.id, today.id]));
+  expect(await list('due=upcoming')).toEqual([tomorrow.id]);
+  expect(await list('search=distinct-search-text&limit=1')).toEqual([today.id]);
+  const complete = await authenticated(`/tasks/${today.id}/complete`, f.token, {
+    expectedVersion: 1,
+  });
+  expect(complete.status).toBe(200);
+  expect(await list('due=overdue')).toEqual([yesterday.id]);
+  const patched = await authenticated(
+    `/tasks/${tomorrow.id}`,
+    f.token,
+    { expectedVersion: 1, remindAt: new Date(start.getTime() + 90000000).toISOString() },
+    'PATCH',
+  );
+  expect(patched.status).toBe(400);
+  expect((await db().task.findUniqueOrThrow({ where: { id: tomorrow.id } })).version).toBe(1);
+});
+it('a duplicate job before its scheduled time neither delivers early nor consumes an attempt', async () => {
+  const f = await commercialFixture();
+  await taskOwnerToken(f);
+  const future = new Date(Date.now() + 3600000).toISOString();
+  const row = await taskFixture(f, { dueAt: future, remindAt: future });
+  const intent = await db().taskReminder.findFirstOrThrow({ where: { taskId: row.id } });
+  const q = reminderQueue();
+  const jobId = randomUUID();
+  try {
+    await q.add('early-duplicate', { version: 1, reminderId: intent.id }, { jobId });
+    await until(
+      async () => (await q.getJob(jobId))?.getState().then((s) => s === 'completed') ?? false,
+      'early duplicate job completes without effect',
+    );
+  } finally {
+    await q.close();
+  }
+  expect(await db().notification.count({ where: { reminderId: intent.id } })).toBe(0);
+  expect(await db().taskReminder.findUniqueOrThrow({ where: { id: intent.id } })).toMatchObject({
+    state: 'PENDING',
+    attemptCount: 0,
+    availableAt: new Date(future),
+  });
+});
+it('task histories, commands, timelines and notifications never resolve foreign-tenant IDs', async () => {
+  const a = await commercialFixture(),
+    b = await commercialFixture();
+  const contact = await contactFixture(b),
+    future = new Date(Date.now() + 3600000).toISOString();
+  const row = await taskFixture(b, {
+    dueAt: future,
+    remindAt: future,
+    target: { type: 'contact', id: contact.id },
+  });
+  const intent = await db().taskReminder.findFirstOrThrow({ where: { taskId: row.id } });
+  const notice = await db().notification.create({
+    data: { organizationId: b.org.id, recipientMembershipId: b.owner.id, reminderId: intent.id },
+  });
+  for (const suffix of ['', '/history', '/reminder'])
+    expect(
+      (await authenticated(`/tasks/${row.id}${suffix}`, a.token, undefined, 'GET')).status,
+    ).toBe(404);
+  expect(
+    (
+      await authenticated(
+        `/tasks/${row.id}`,
+        a.token,
+        { expectedVersion: 1, name: 'Foreign' },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(404);
+  for (const suffix of ['complete', 'reminder-retry'])
+    expect(
+      (await authenticated(`/tasks/${row.id}/${suffix}`, a.token, { expectedVersion: 1 })).status,
+    ).toBe(404);
+  expect(
+    (await authenticated(`/activities/contact/${contact.id}/timeline`, a.token, undefined, 'GET'))
+      .status,
+  ).toBe(404);
+  expect((await authenticated(`/notifications/${notice.id}/read`, a.token, {})).status).toBe(404);
+  expect(
+    notificationListResponseSchema.parse(
+      await (await authenticated('/notifications', a.token, undefined, 'GET')).json(),
+    ).data,
+  ).toEqual([]);
+  expect((await db().task.findUniqueOrThrow({ where: { id: row.id } })).version).toBe(1);
+  expect(
+    (await db().notification.findUniqueOrThrow({ where: { id: notice.id } })).readAt,
+  ).toBeNull();
 });

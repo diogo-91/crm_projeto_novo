@@ -4,3 +4,5 @@ export { AccessBootstrapGateway } from './infrastructure/access-bootstrap.gatewa
 export type { TenantContext, Grant } from './domain/access-policy.js';
 export { permits, orgPermission, collectionScope } from './domain/access-policy.js';
 export { commercialScope, assignmentScope } from './domain/commercial-scope.js';
+
+export type { ResourceContext } from './domain/access-policy.js';

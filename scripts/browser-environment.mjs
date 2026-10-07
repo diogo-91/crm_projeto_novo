@@ -174,13 +174,14 @@ try {
   );
   const api = start(['apps/api/dist/bootstrap/main.js'], environment);
   await ready(`${apiUrl.origin}/health/ready`, api);
+  start(['apps/worker/dist/bootstrap/main.js'], environment);
   const web = start(
     ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1'],
     { ...process.env, NODE_ENV: 'production' },
     join(process.cwd(), 'apps/web'),
   );
   await ready('http://localhost:3000/login', web);
-  console.info('Browser environment ready: isolated PostgreSQL/Redis and real API/web.');
+  console.info('Browser environment ready: isolated PostgreSQL/Redis and real API/web/worker.');
 } catch (error) {
   console.error(error instanceof Error ? error.message : 'Browser environment failed');
   await stop();

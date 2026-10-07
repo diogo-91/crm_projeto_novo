@@ -1,4 +1,5 @@
 'use client';
+import { Timeline } from '@/features/tasks/timeline';
 import { useState } from 'react';
 import Link from 'next/link';
 import { Button, Badge, EmptyState } from '@crm/ui';
@@ -95,6 +96,7 @@ export function ContactDetail({ id }: { id: string }) {
           { label: 'Atualizado em', value: new Date(row.updatedAt).toLocaleString('pt-BR') },
         ]}
       />
+      <Timeline target={{ type: 'contact', id: row.id }} active={row.active} />
       <RecordDialog open={editing} onOpenChange={setEditing} title="Editar cliente">
         {editing && (
           <ContactForm key={row.version} record={row} onSaved={() => setEditing(false)} />

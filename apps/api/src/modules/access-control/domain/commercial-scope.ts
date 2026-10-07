@@ -1,8 +1,12 @@
 import type { PermissionCode } from '@crm/contracts';
 import { collectionScope } from './access-policy.js';
-import type { TenantContext } from './access-policy.js';
-export function commercialScope(context: TenantContext, permission: PermissionCode) {
-  const scope = collectionScope(context, permission);
+import type { ResourceContext } from './access-policy.js';
+export function commercialScope(
+  context: ResourceContext,
+  permission: PermissionCode,
+  required = true,
+) {
+  const scope = collectionScope(context, permission, required);
   return {
     organizationId: context.organizationId,
     ...(scope.organization
@@ -22,7 +26,7 @@ export function commercialScope(context: TenantContext, permission: PermissionCo
         }),
   };
 }
-export function assignmentScope(context: TenantContext, permission: PermissionCode) {
+export function assignmentScope(context: ResourceContext, permission: PermissionCode) {
   const scope = collectionScope(context, permission);
   return {
     branchIds: scope.organization

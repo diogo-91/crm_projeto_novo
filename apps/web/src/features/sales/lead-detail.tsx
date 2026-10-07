@@ -1,4 +1,5 @@
 'use client';
+import { Timeline } from '@/features/tasks/timeline';
 import { ConversionForm } from './conversion-form';
 import { useState } from 'react';
 import Link from 'next/link';
@@ -107,6 +108,7 @@ export function LeadDetail({ id }: { id: string }) {
           { label: 'Atualizado em', value: new Date(row.updatedAt).toLocaleString('pt-BR') },
         ]}
       />
+      <Timeline target={{ type: 'lead', id: row.id }} active={row.active} />
       <RecordDialog open={converting} onOpenChange={setConverting} title="Converter lead">
         {converting && <ConversionForm record={row} onSaved={() => setConverting(false)} />}
       </RecordDialog>

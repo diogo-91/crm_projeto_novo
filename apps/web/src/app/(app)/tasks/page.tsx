@@ -1,10 +1,12 @@
 import type { Metadata } from 'next';
-import { ModulePlaceholder } from '@/components/layout/module-placeholder';
+import { Suspense } from 'react';
+import { TaskList } from '@/features/tasks/task-list';
+import { ListSkeleton } from '@/features/commercial/query-feedback';
 export const metadata: Metadata = { title: 'Tarefas' };
 export default function Page() {
   return (
-    <>
-      <ModulePlaceholder href="/tasks" />
-    </>
+    <Suspense fallback={<ListSkeleton />}>
+      <TaskList />
+    </Suspense>
   );
 }

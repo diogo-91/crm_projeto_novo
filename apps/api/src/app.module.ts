@@ -1,3 +1,6 @@
+import { TasksModule } from './modules/tasks/tasks.module.js';
+import { ActivitiesModule } from './modules/activities/index.js';
+import { NotificationsModule } from './modules/notifications/index.js';
 import { LeadsModule } from './modules/leads/index.js';
 import { ContactsModule } from './modules/contacts/index.js';
 import { APP_GUARD } from '@nestjs/core';
@@ -19,6 +22,9 @@ import { OrganizationsModule } from './modules/organizations/organizations.modul
     AccessControlModule,
     ContactsModule,
     LeadsModule,
+    TasksModule,
+    ActivitiesModule,
+    NotificationsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: AuthenticationGuard },

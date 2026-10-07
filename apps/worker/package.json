@@ -9,7 +9,8 @@
     "@crm/config": "workspace:*",
     "@nestjs/common": "12.1.2",
     "@nestjs/core": "12.1.2",
-    "reflect-metadata": "0.2.2"
+    "reflect-metadata": "0.2.2",
+    "bullmq": "6.3.11"
   },
   "devDependencies": {
     "@crm/eslint-config": "workspace:*",

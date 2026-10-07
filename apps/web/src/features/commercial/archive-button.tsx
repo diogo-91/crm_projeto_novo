@@ -17,7 +17,7 @@ export function ArchiveButton({
   id,
   version,
 }: {
-  resource: CommercialResource | 'tags';
+  resource: Exclude<CommercialResource, 'tasks'> | 'tags';
   id: string;
   version: number;
 }) {

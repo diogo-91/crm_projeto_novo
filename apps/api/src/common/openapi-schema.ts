@@ -20,6 +20,8 @@ const supported = new Set([
   'maxItems',
   'minimum',
   'maximum',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
   'default',
   'description',
   'anyOf',
@@ -44,6 +46,13 @@ function convert(value: unknown): SchemaObject {
   if (typeof source['maxItems'] === 'number') schema.maxItems = source['maxItems'];
   if (typeof source['minimum'] === 'number') schema.minimum = source['minimum'];
   if (typeof source['maximum'] === 'number') schema.maximum = source['maximum'];
+  for (const key of ['exclusiveMinimum', 'exclusiveMaximum'] as const) {
+    const bound = source[key];
+    if (bound !== undefined) {
+      if (typeof bound !== 'boolean') throw new Error('Invalid OpenAPI exclusive bound');
+      schema[key] = bound;
+    }
+  }
   if ('default' in source) schema.default = source['default'];
   if (source['required'] !== undefined) {
     const required = source['required'];

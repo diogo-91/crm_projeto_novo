@@ -814,3 +814,35 @@ erDiagram
 - Regra condicional de pipeline específico de filial é aplicada pelo proprietário do módulo, sob lock compartilhado do pipeline; FKs tenant fornecem proteção adicional de organização. Alterar o pipeline de uma oportunidade não é permitido pelo PATCH.
 
 Banco limpo e upgrade devem receber todas as sete migrations via migrate deploy; seed repetido preserva credenciais/IDs/dados. Não usar db push, modificar migrations aplicadas ou ampliar grants tenant por SQL de migration.
+
+## Modelo físico incremental — fase 7
+
+Migration `20261007200000_create_tasks_activities_reminders` adiciona Task, TaskHistory, Activity, TaskReminder e Notification, além dos enums específicos. As sete migrations anteriores permanecem imutáveis. Não há alteração de grants por SQL nem entidades antecipadas da fase 8. ADR-016 registra critérios de visibilidade, versionamento, geração de lembrete e entrega.
+
+```mermaid
+erDiagram
+  Organization ||--o{ Task : possui
+  MembershipBranch ||--o{ Task : responsavel_na_filial
+  OrganizationMembership ||--o{ TaskHistory : autoria
+  Task ||--|{ TaskHistory : versao_atomica
+  Contact o|--o{ Task : alvo_opcional
+  Lead o|--o{ Task : alvo_opcional
+  Opportunity o|--o{ Task : alvo_opcional
+  OrganizationMembership ||--o{ Activity : autoria
+  Contact o|--o{ Activity : alvo_exclusivo
+  Lead o|--o{ Activity : alvo_exclusivo
+  Opportunity o|--o{ Activity : alvo_exclusivo
+  Task ||--o{ TaskReminder : geracao_de_agendamento
+  OrganizationMembership ||--o{ TaskReminder : destinatario
+  TaskReminder ||--o| Notification : efeito_local_unico
+  OrganizationMembership ||--o{ Notification : caixa_privada
+```
+
+- Task: FK `(organization_id,owner_membership_id,branch_id)` → MembershipBranch; autores/atualizadores → membership tenant; referências Contact/Lead/Opportunity por tenant+ID. CHECK permite zero ou um alvo. Version/reminderVersion positivos; OPEN implica completedAt nulo e COMPLETED exige instante. Título não vazio; remindAt exige dueAt e não ultrapassa vencimento. Desativação usa active, preservando vínculos e histórico.
+- TaskHistory: FK tenant+task e tenant+ator, unique tenant+task+recordVersion; título na ocorrência, tipo da mudança e instante. Leitura usa acesso atual à tarefa/alvo, sem ACL histórica ou cópia de todo estado.
+- Activity: autoria membership e FKs compostas para três alvos; CHECK exige exatamente um e descrição não vazia. Imutável pela API desta fase. Timeline consulta também TaskHistory e OpportunityStageHistory existentes, sem duplicar eventos em Activity.
+- TaskReminder: FK tenant+tarefa e tenant+destinatário; unique tenant+tarefa+scheduledVersion. Estados PENDING/DISPATCHED/COMPLETED/CANCELED/FAILED, checkpoint availableAt, lease/token, tentativas 0–5 e código de falha seguro. DISPATCHED exige lease completo; demais estados não têm lease; COMPLETED exige completedAt; FAILED exige cinco falhas. Não persiste tokens de sessão ou texto de exceção.
+- Notification: FK **(tenant,reminderId,recipientMembershipId)** → TaskReminder **(tenant,id,recipientMembershipId)**, impedindo trocar tenant ou destinatário. Unique no mesmo trio permite somente um efeito por intenção. Projeção de título é autorizada no momento da leitura; banco não guarda cópia de conteúdo comercial nem destinatário User global. readAt torna leitura idempotente.
+- Índices: Task tenant+createdAt+id para lista, tenant+owner+dueAt+id para carteira/vencimento, tenant+branch+createdAt+id, tenant+targetID por referência; TaskHistory tenant+createdAt+id e unique de versão; Activity tenant+targetID+createdAt+id; TaskReminder state+availableAt+leaseUntil+id para reconciliação; Notification tenant+recipient+createdAt+id para caixa. Índices auxiliares tenant+id dão suporte às FKs compostas. Sorts alternativos e busca substring não prometem B-tree específico antes de medição.
+
+Task.reminderVersion incrementa somente ao mudar destino, alvo, datas ou lifecycle. Cancelar/agendar é parte da mesma transação da tarefa; título/descrição/prioridade não repetem a entrega. Consumidor conclui intenção e insere Notification na mesma transação, sob locks membership/tarefa/intenção. Sem delete físico automático de falhas/checkpoints: retenção futura precisa preservar a deduplicação. O seed mantém demo estrutural, atualiza 44 permissões e seis templates somente na demo, sem Task/Activity/Notification fictícios.

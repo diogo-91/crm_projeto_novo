@@ -32,3 +32,5 @@ export * from './access-control.js';
 export * from './commercial.js';
 
 export * from './sales.js';
+
+export * from './tasks.js';

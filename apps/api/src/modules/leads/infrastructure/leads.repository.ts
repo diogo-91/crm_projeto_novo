@@ -119,6 +119,14 @@ export class LeadsRepository {
     if (!row) throw new ApplicationError('RESOURCE_NOT_FOUND', 'Lead unavailable.');
     return this.response(this.database.client, context, row);
   }
+  async target(tx: DatabaseTransaction, context: TenantContext, id: string) {
+    const row = await tx.lead.findFirst({
+      where: { AND: [commercialScope(context, 'leads.read'), { id }] },
+      select: { id: true, name: true, branchId: true, ownerMembershipId: true, active: true },
+    });
+    if (!row) throw new ApplicationError('RESOURCE_NOT_FOUND', 'Target unavailable.');
+    return row;
+  }
   async list(context: TenantContext, query: LeadListQuery) {
     const rows = await this.database.client.lead.findMany({
       where: {

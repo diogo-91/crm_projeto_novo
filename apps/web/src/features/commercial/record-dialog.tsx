@@ -8,10 +8,12 @@ export function RecordDialog({
   title,
   children,
   fallbackFocus,
+  description = 'Confira os dados e a atribuição à filial antes de salvar.',
 }: {
   open: boolean;
   onOpenChange: (value: boolean) => void;
   title: string;
+  description?: string;
   children: ReactNode;
   fallbackFocus?: RefObject<HTMLElement | null>;
 }) {
@@ -36,7 +38,7 @@ export function RecordDialog({
       >
         <DialogTitle className="text-xl font-semibold">{title}</DialogTitle>
         <DialogDescription className="mb-6 mt-2 text-body text-muted">
-          Confira os dados e a atribuição à filial antes de salvar.
+          {description}
         </DialogDescription>
         {children}
       </DialogContent>

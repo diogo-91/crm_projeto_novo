@@ -6,6 +6,9 @@ import { ContactsRepository } from './contacts.repository.js';
 @Injectable()
 export class ContactsLookupGateway {
   constructor(@Inject(ContactsRepository) private readonly repository: ContactsRepository) {}
+  target(tx: DatabaseTransaction, context: TenantContext, id: string) {
+    return this.repository.target(tx, context, id);
+  }
   create(tx: DatabaseTransaction, context: TenantContext, input: CreateContact) {
     return this.repository.createInTransaction(tx, context, input);
   }

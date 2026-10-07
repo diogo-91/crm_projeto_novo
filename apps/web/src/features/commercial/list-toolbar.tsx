@@ -22,7 +22,9 @@ export function ListToolbar({
           id={`${resource}-search`}
           type="search"
           value={search}
-          placeholder="Nome, telefone, e-mail ou documento"
+          placeholder={
+            resource === 'tasks' ? 'Título ou descrição' : 'Nome, telefone, e-mail ou documento'
+          }
           onChange={(event) => onSearch(event.target.value)}
         />
       </FormField>

@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { expect, it } from 'vitest';
 import {
   createOrganizationUserSchema,
@@ -24,4 +25,13 @@ it('documents nullable primary branch and safe identity response', () => {
   expect(schema.properties).toHaveProperty('primaryBranchId.nullable', true);
   expect(schema.properties).toHaveProperty('user.properties.email.format', 'email');
   expect(schema.properties).not.toHaveProperty('user.properties.passwordHash');
+});
+
+it('preserves exclusive numeric bounds in OpenAPI 3 instead of weakening validation', () => {
+  expect(openApiSchema(z.number().gt(0).lt(10))).toMatchObject({
+    minimum: 0,
+    exclusiveMinimum: true,
+    maximum: 10,
+    exclusiveMaximum: true,
+  });
 });

@@ -20,7 +20,7 @@ import type {
   UpdateTag,
 } from '@crm/contracts';
 import { useAuth } from '@/features/auth/auth-provider';
-export type CommercialResource = 'contacts' | 'companies' | 'leads' | 'opportunities';
+export type CommercialResource = 'contacts' | 'companies' | 'leads' | 'opportunities' | 'tasks';
 export type Filters = Record<string, string>;
 export function queryString(filters: Filters) {
   return new URLSearchParams(
@@ -223,7 +223,7 @@ export function useSaveTag(id?: string) {
     },
   });
 }
-export function useArchive(resource: CommercialResource | 'tags') {
+export function useArchive(resource: Exclude<CommercialResource, 'tasks'> | 'tags') {
   const { session, root } = useCommercialContext();
   const client = useQueryClient();
   return useMutation({

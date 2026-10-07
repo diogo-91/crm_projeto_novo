@@ -19,6 +19,9 @@ model InfrastructureMetadata {
 }
 
 model Organization {
+  tasks      Task[]
+  activities Activity[]
+
   leads         Lead[]
   pipelines     Pipeline[]
   opportunities Opportunity[]
@@ -85,6 +88,13 @@ model User {
 }
 
 model OrganizationMembership {
+  taskAuthors   Task[]         @relation("TaskCreator")
+  taskUpdates   Task[]         @relation("TaskUpdater")
+  taskHistory   TaskHistory[]
+  activities    Activity[]     @relation("ActivityActor")
+  notifications Notification[]
+  taskReminders TaskReminder[]
+
   opportunityHistoryActor OpportunityAssignmentHistory[] @relation("OpportunityHistoryActor")
   opportunityHistoryFrom  OpportunityAssignmentHistory[] @relation("OpportunityHistoryOwnerFrom")
   opportunityHistoryTo    OpportunityAssignmentHistory[] @relation("OpportunityHistoryOwnerTo")
@@ -128,6 +138,8 @@ model OrganizationMembership {
 }
 
 model MembershipBranch {
+  tasks Task[]
+
   ownedLeads         Lead[]
   ownedOpportunities Opportunity[]
   id                 String                   @id @default(uuid()) @db.Uuid
@@ -328,6 +340,9 @@ model Company {
 }
 
 model Contact {
+  tasks      Task[]
+  activities Activity[]
+
   leads                 Lead[]
   opportunities         Opportunity[]
   assignmentHistory     ContactAssignmentHistory[]
@@ -514,6 +529,9 @@ model PipelineStage {
 }
 
 model Lead {
+  tasks      Task[]
+  activities Activity[]
+
   id                    String                  @id @default(uuid()) @db.Uuid
   organizationId        String                  @map("organization_id") @db.Uuid
   branchId              String                  @map("branch_id") @db.Uuid
@@ -556,6 +574,9 @@ model Lead {
 }
 
 model Opportunity {
+  tasks      Task[]
+  activities Activity[]
+
   id                    String                         @id @default(uuid()) @db.Uuid
   organizationId        String                         @map("organization_id") @db.Uuid
   branchId              String                         @map("branch_id") @db.Uuid
@@ -671,4 +692,167 @@ model OpportunityAssignmentHistory {
 
   @@unique([organizationId, opportunityId, recordVersion])
   @@map("opportunity_assignment_history")
+}
+
+enum TaskStatus {
+  OPEN
+  COMPLETED
+}
+
+enum TaskKind {
+  TASK
+  FOLLOW_UP
+}
+
+enum TaskPriority {
+  LOW
+  NORMAL
+  HIGH
+}
+
+enum TaskEventKind {
+  CREATED
+  UPDATED
+  COMPLETED
+  REOPENED
+  ARCHIVED
+}
+
+enum ActivityKind {
+  NOTE
+  CALL
+  EMAIL
+  MEETING
+}
+
+enum ReminderState {
+  PENDING
+  DISPATCHED
+  COMPLETED
+  CANCELED
+  FAILED
+}
+
+model Task {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  organizationId        String                 @map("organization_id") @db.Uuid
+  branchId              String                 @map("branch_id") @db.Uuid
+  ownerMembershipId     String                 @map("owner_membership_id") @db.Uuid
+  name                  String                 @db.VarChar(160)
+  description           String?                @db.VarChar(4000)
+  kind                  TaskKind               @default(TASK)
+  priority              TaskPriority           @default(NORMAL)
+  status                TaskStatus             @default(OPEN)
+  dueAt                 DateTime?              @map("due_at") @db.Timestamptz(6)
+  remindAt              DateTime?              @map("remind_at") @db.Timestamptz(6)
+  completedAt           DateTime?              @map("completed_at") @db.Timestamptz(6)
+  contactId             String?                @map("contact_id") @db.Uuid
+  leadId                String?                @map("lead_id") @db.Uuid
+  opportunityId         String?                @map("opportunity_id") @db.Uuid
+  active                Boolean                @default(true)
+  version               Int                    @default(1)
+  reminderVersion       Int                    @default(1) @map("reminder_version")
+  createdByMembershipId String                 @map("created_by_membership_id") @db.Uuid
+  updatedByMembershipId String                 @map("updated_by_membership_id") @db.Uuid
+  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  assignment            MembershipBranch       @relation(fields: [organizationId, ownerMembershipId, branchId], references: [organizationId, membershipId, branchId], onDelete: Restrict, onUpdate: Restrict)
+  creator               OrganizationMembership @relation("TaskCreator", fields: [organizationId, createdByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  updater               OrganizationMembership @relation("TaskUpdater", fields: [organizationId, updatedByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  contact               Contact?               @relation(fields: [organizationId, contactId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  lead                  Lead?                  @relation(fields: [organizationId, leadId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  opportunity           Opportunity?           @relation(fields: [organizationId, opportunityId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  history               TaskHistory[]
+  reminders             TaskReminder[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, createdAt, id])
+  @@index([organizationId, ownerMembershipId, dueAt, id])
+  @@index([organizationId, branchId, createdAt, id])
+  @@index([organizationId, contactId])
+  @@index([organizationId, leadId])
+  @@index([organizationId, opportunityId])
+  @@map("tasks")
+}
+
+model TaskHistory {
+  id                String                 @id @default(uuid()) @db.Uuid
+  organizationId    String                 @map("organization_id") @db.Uuid
+  taskId            String                 @map("task_id") @db.Uuid
+  actorMembershipId String                 @map("actor_membership_id") @db.Uuid
+  kind              TaskEventKind
+  name              String                 @db.VarChar(160)
+  recordVersion     Int                    @map("record_version")
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  task              Task                   @relation(fields: [organizationId, taskId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  actor             OrganizationMembership @relation(fields: [organizationId, actorMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, taskId, recordVersion])
+  @@index([organizationId, createdAt, id])
+  @@map("task_history")
+}
+
+model Activity {
+  id                String                 @id @default(uuid()) @db.Uuid
+  organizationId    String                 @map("organization_id") @db.Uuid
+  actorMembershipId String                 @map("actor_membership_id") @db.Uuid
+  kind              ActivityKind
+  description       String                 @db.VarChar(4000)
+  contactId         String?                @map("contact_id") @db.Uuid
+  leadId            String?                @map("lead_id") @db.Uuid
+  opportunityId     String?                @map("opportunity_id") @db.Uuid
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  organization      Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actor             OrganizationMembership @relation("ActivityActor", fields: [organizationId, actorMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  contact           Contact?               @relation(fields: [organizationId, contactId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  lead              Lead?                  @relation(fields: [organizationId, leadId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  opportunity       Opportunity?           @relation(fields: [organizationId, opportunityId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, id])
+  @@index([organizationId, contactId, createdAt, id])
+  @@index([organizationId, leadId, createdAt, id])
+  @@index([organizationId, opportunityId, createdAt, id])
+  @@map("activities")
+}
+
+model TaskReminder {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  organizationId        String                 @map("organization_id") @db.Uuid
+  taskId                String                 @map("task_id") @db.Uuid
+  recipientMembershipId String                 @map("recipient_membership_id") @db.Uuid
+  scheduledVersion      Int                    @map("scheduled_version")
+  state                 ReminderState          @default(PENDING)
+  availableAt           DateTime               @map("available_at") @db.Timestamptz(6)
+  leaseToken            String?                @map("lease_token") @db.Uuid
+  leaseUntil            DateTime?              @map("lease_until") @db.Timestamptz(6)
+  attemptCount          Int                    @default(0) @map("attempt_count")
+  lastErrorCode         String?                @map("last_error_code") @db.VarChar(64)
+  completedAt           DateTime?              @map("completed_at") @db.Timestamptz(6)
+  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  task                  Task                   @relation(fields: [organizationId, taskId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  recipient             OrganizationMembership @relation(fields: [organizationId, recipientMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  notification          Notification?
+
+  @@unique([organizationId, id, recipientMembershipId])
+  @@unique([organizationId, id])
+  @@unique([organizationId, taskId, scheduledVersion])
+  @@index([state, availableAt, leaseUntil, id])
+  @@map("task_reminders")
+}
+
+model Notification {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  organizationId        String                 @map("organization_id") @db.Uuid
+  recipientMembershipId String                 @map("recipient_membership_id") @db.Uuid
+  reminderId            String                 @map("reminder_id") @db.Uuid
+  readAt                DateTime?              @map("read_at") @db.Timestamptz(6)
+  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  recipient             OrganizationMembership @relation(fields: [organizationId, recipientMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  reminder              TaskReminder           @relation(fields: [organizationId, reminderId, recipientMembershipId], references: [organizationId, id, recipientMembershipId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, reminderId, recipientMembershipId], map: "notifications_reminder_recipient_key")
+  @@unique([organizationId, id])
+  @@index([organizationId, recipientMembershipId, createdAt, id])
+  @@map("notifications")
 }

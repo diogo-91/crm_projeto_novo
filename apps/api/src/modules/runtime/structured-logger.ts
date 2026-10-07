@@ -16,6 +16,10 @@ type LogFields = {
   jobId?: string;
   errorType?: string;
   signal?: string;
+  pending?: number;
+  failed?: number;
+  lagMs?: number;
+  attemptCount?: number;
 };
 export class StructuredLogger implements LoggerService {
   private readonly logger: Logger;
@@ -52,8 +56,8 @@ export class StructuredLogger implements LoggerService {
   info(message: string, context: string, fields: LogFields = {}): void {
     this.logger.info({ context, ...requestMetadata.getStore(), ...fields }, this.message(message));
   }
-  warn(message: unknown, context = 'runtime'): void {
-    this.logger.warn({ context }, this.message(message));
+  warn(message: unknown, context = 'runtime', fields: LogFields = {}): void {
+    this.logger.warn({ context, ...requestMetadata.getStore(), ...fields }, this.message(message));
   }
   error(message: unknown): void {
     this.logger.error({ context: 'runtime' }, this.message(message));

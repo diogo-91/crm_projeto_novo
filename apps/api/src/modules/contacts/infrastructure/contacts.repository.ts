@@ -108,6 +108,14 @@ export class ContactsRepository {
     if (!row) throw new ApplicationError('RESOURCE_NOT_FOUND', 'Contact unavailable.');
     return this.response(tx, context, row);
   }
+  async target(tx: DatabaseTransaction, context: TenantContext, id: string) {
+    const row = await tx.contact.findFirst({
+      where: { AND: [commercialScope(context, 'contacts.read'), { id }] },
+      select: { id: true, name: true, branchId: true, ownerMembershipId: true, active: true },
+    });
+    if (!row) throw new ApplicationError('RESOURCE_NOT_FOUND', 'Target unavailable.');
+    return row;
+  }
   async list(context: TenantContext, query: ContactListQuery) {
     const tx = this.database.client;
     if (query.companyId) await this.companies.requireLink(tx, context, query.companyId, false);

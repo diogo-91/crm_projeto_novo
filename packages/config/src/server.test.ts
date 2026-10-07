@@ -36,10 +36,14 @@ describe('server environment', () => {
     expect(() =>
       parseApiEnvironment({ ...valid, DATABASE_URL: 'private-sensitive-value' }),
     ).toThrow(/^Invalid environment configuration: DATABASE_URL$/));
-  it('worker does not require unrelated API or database settings', () =>
+  it('worker requires database for durable reminders but no API signing secret', () =>
     expect(
-      parseWorkerEnvironment({ NODE_ENV: 'test', REDIS_HOST: 'localhost', REDIS_PORT: '6379' })
-        .role,
+      parseWorkerEnvironment({
+        NODE_ENV: 'test',
+        REDIS_HOST: 'localhost',
+        REDIS_PORT: '6379',
+        DATABASE_URL: valid.DATABASE_URL,
+      }).role,
     ).toBe('worker'));
   it('rejects a non-PostgreSQL URL', () =>
     expect(() => parseDatabaseEnvironment({ DATABASE_URL: 'https://example.com' })).toThrow(
@@ -66,4 +70,10 @@ it('requires the API signing secret', () => {
   const input: Record<string, unknown> = { ...valid };
   delete input['JWT_SECRET'];
   expect(() => parseApiEnvironment(input)).toThrow('JWT_SECRET');
+});
+
+it('worker fails startup without the database required by durable reminders', () => {
+  expect(() =>
+    parseWorkerEnvironment({ NODE_ENV: 'test', REDIS_HOST: 'localhost', REDIS_PORT: '6379' }),
+  ).toThrow('DATABASE_URL');
 });

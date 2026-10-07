@@ -15,7 +15,10 @@ export type CommercialPageQuery = {
   sort: 'name' | 'createdAt' | 'updatedAt';
   direction: 'asc' | 'desc';
 };
-export function cursorFilter(query: CommercialPageQuery) {
+export function cursorFilter(
+  query: CommercialPageQuery,
+  dateField: 'createdAt' | 'occurredAt' = 'createdAt',
+) {
   if (!query.cursor) return {};
   let value: unknown;
   try {
@@ -35,11 +38,9 @@ export function cursorFilter(query: CommercialPageQuery) {
   const comparison = query.sort === 'name' ? p.value : new Date(p.value);
   if (comparison instanceof Date && !Number.isFinite(comparison.getTime()))
     throw new ApplicationError('INVALID_INPUT', 'Invalid cursor date.');
+  const field = query.sort === 'createdAt' ? dateField : query.sort;
   return {
-    OR: [
-      { [query.sort]: { [key]: comparison } },
-      { [query.sort]: comparison, id: { [key]: p.id } },
-    ],
+    OR: [{ [field]: { [key]: comparison } }, { [field]: comparison, id: { [key]: p.id } }],
   };
 }
 export function commercialPage<
