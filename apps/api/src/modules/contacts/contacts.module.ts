@@ -1,3 +1,4 @@
+import { ContactsLookupGateway } from './infrastructure/contacts-lookup.gateway.js';
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../database/database.module.js';
 import { AccessControlModule } from '../access-control/index.js';
@@ -16,6 +17,7 @@ import { ContactsRepository } from './infrastructure/contacts.repository.js';
     TagsModule,
   ],
   controllers: [ContactsController],
-  providers: [ContactsService, ContactsRepository],
+  providers: [ContactsService, ContactsRepository, ContactsLookupGateway],
+  exports: [ContactsLookupGateway],
 })
 export class ContactsModule {}

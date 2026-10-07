@@ -9,7 +9,8 @@ import { RecordSummary } from '@/features/commercial/record-summary';
 import { RecordDialog } from '@/features/commercial/record-dialog';
 import { ArchiveButton } from '@/features/commercial/archive-button';
 import { usePermission } from '@/features/auth/auth-provider';
-import { ContactForm, sourceLabels } from './contact-form';
+import { ContactForm } from './contact-form';
+import { sourceLabels } from '@/features/commercial/source-labels';
 export function ContactDetail({ id }: { id: string }) {
   const query = useContact(id);
   const [editing, setEditing] = useState(false);

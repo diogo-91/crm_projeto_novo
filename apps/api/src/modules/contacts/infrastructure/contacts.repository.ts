@@ -150,6 +150,33 @@ export class ContactsRepository {
     });
     return commercialPage(await this.responses(tx, context, rows), query);
   }
+  async visibleMany(tx: DatabaseTransaction, context: TenantContext, ids: string[]) {
+    if (!context.grants.some((grant) => grant.permissions.includes('contacts.read')))
+      return new Map<string, { id: string; name: string }>();
+    const rows = await tx.contact.findMany({
+      where: { AND: [commercialScope(context, 'contacts.read'), { id: { in: ids } }] },
+      select: { id: true, name: true },
+    });
+    return new Map(rows.map((row) => [row.id, row]));
+  }
+  async requireLink(
+    tx: DatabaseTransaction,
+    context: TenantContext,
+    id: string,
+    activeOnly = true,
+  ) {
+    const row = await tx.contact.findFirst({
+      where: {
+        AND: [
+          commercialScope(context, 'contacts.read'),
+          { id, ...(activeOnly ? { active: true } : {}) },
+        ],
+      },
+      select: { id: true },
+    });
+    if (!row)
+      throw new ApplicationError('RESOURCE_NOT_FOUND', 'Contact unavailable for association.');
+  }
   create(context: TenantContext, input: CreateContact) {
     return persist(() =>
       this.database.client.$transaction(async (tx) => {
@@ -159,41 +186,39 @@ export class ContactsRepository {
           'contacts.create',
           'collection',
         );
-        const ownerMembershipId = input.ownerMembershipId ?? fresh.membershipId;
-        this.destination(fresh, 'contacts.create', input.branchId, ownerMembershipId);
-        if (ownerMembershipId !== fresh.membershipId)
-          this.destination(fresh, 'contacts.assign', input.branchId, ownerMembershipId);
-        await this.directory.assignment(
-          tx,
-          fresh.organizationId,
-          input.branchId,
-          ownerMembershipId,
-        );
-        if (input.companyId) await this.companies.requireLink(tx, fresh, input.companyId);
-        await this.tags.requireLinks(tx, fresh, input.tagIds);
-        const row = await tx.contact.create({
-          data: {
-            organizationId: fresh.organizationId,
-            branchId: input.branchId,
-            ownerMembershipId,
-            name: input.name,
-            phone: input.phone,
-            normalizedPhone: normalizePhone(input.phone),
-            email: input.email ?? null,
-            document: input.document ?? null,
-            normalizedDocument: input.document ? normalizeDocument(input.document) : null,
-            notes: input.notes ?? null,
-            source: input.source,
-            companyId: input.companyId ?? null,
-            createdByMembershipId: fresh.membershipId,
-            updatedByMembershipId: fresh.membershipId,
-          },
-          select: columns,
-        });
-        await this.replaceTags(tx, fresh, row.id, input.tagIds);
-        return this.response(tx, fresh, row);
+        return this.createInTransaction(tx, fresh, input);
       }),
     );
+  }
+  async createInTransaction(tx: DatabaseTransaction, context: TenantContext, input: CreateContact) {
+    const ownerMembershipId = input.ownerMembershipId ?? context.membershipId;
+    this.destination(context, 'contacts.create', input.branchId, ownerMembershipId);
+    if (ownerMembershipId !== context.membershipId)
+      this.destination(context, 'contacts.assign', input.branchId, ownerMembershipId);
+    await this.directory.assignment(tx, context.organizationId, input.branchId, ownerMembershipId);
+    if (input.companyId) await this.companies.requireLink(tx, context, input.companyId);
+    await this.tags.requireLinks(tx, context, input.tagIds);
+    const row = await tx.contact.create({
+      data: {
+        organizationId: context.organizationId,
+        branchId: input.branchId,
+        ownerMembershipId,
+        name: input.name,
+        phone: input.phone,
+        normalizedPhone: normalizePhone(input.phone),
+        email: input.email ?? null,
+        document: input.document ?? null,
+        normalizedDocument: input.document ? normalizeDocument(input.document) : null,
+        notes: input.notes ?? null,
+        source: input.source,
+        companyId: input.companyId ?? null,
+        createdByMembershipId: context.membershipId,
+        updatedByMembershipId: context.membershipId,
+      },
+      select: columns,
+    });
+    await this.replaceTags(tx, context, row.id, input.tagIds);
+    return this.response(tx, context, row);
   }
   update(context: TenantContext, id: string, input: UpdateContact) {
     return this.change(context, id, input.expectedVersion, 'contacts.update', input);

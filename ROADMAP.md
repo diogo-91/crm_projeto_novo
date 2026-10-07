@@ -2,7 +2,7 @@
 
 ## Como executar
 
-Cada fase deve ser dividida em PRs pequenos, com contrato, implementação autorizada, testes e documentação. Este roadmap **não autoriza execução das próximas fases**. As fases 0–5 estão concluídas. A fase 6 exige nova solicitação. Não gerar todos os módulos/arquivos de uma vez. Decisões só ganham infraestrutura quando um consumidor real precisar.
+Cada fase deve ser dividida em PRs pequenos, com contrato, implementação autorizada, testes e documentação. Este roadmap **não autoriza execução das próximas fases**. As fases 0–6 estão concluídas. A fase 7 exige nova solicitação. Não gerar todos os módulos/arquivos de uma vez. Decisões só ganham infraestrutura quando um consumidor real precisar.
 
 Definition of Done de uma feature: critérios de negócio claros; isolamento organização/filial/carteira; autorização granular; validação e erros; contrato OpenAPI; migration revisada quando existir; testes críticos; logs sem secrets; UI acessível quando pertinente. Falhas conhecidas e testes não executados são explícitos. Nenhuma fase é concluída apenas por scaffold/build.
 
@@ -71,7 +71,7 @@ Gate: criação/leitura/alteração/arquivamento e isolamento API/web cobertos; 
 
 Evidência de 2026-10-07: instalação congelada, lint, typecheck, test, test:integration, build e test:e2e passaram. **270 testes: 161 unitários (incluem 58 frontend/DOM), 10 HTTP, 79 integrações PostgreSQL/Redis e 20 E2E Chromium**. Os 197 testes anteriores foram preservados. Seis migrations aplicadas em PostgreSQL limpo e seed repetido; FKs cruzadas, constraints/corridas, quatro scopes para Contact e Company, versionamento, rollback, histórico de transferência e invalidação de cache cobertos. Plano de consulta avaliado com 2000 registros sintéticos; projeções batched sem N+1. Jornada comercial real, cinco larguras, axe, foco, console e troca de contexto passaram. Banco local anterior recebeu duas migrations incrementais e seed repetido, sem clientes/empresas/tags fictícios. pnpm dev iniciou web/API/worker: health/Swagger, login/logout, páginas/listas autenticadas e job técnico passaram. Artefatos públicos e logs conferidos sem secrets do servidor. ADR-014 documenta as decisões. Nenhuma funcionalidade da fase 6 implementada.
 
-## Fase 6 — Leads e pipeline
+## Fase 6 — Leads e pipeline (concluída)
 
 1. Lead e conversão local transacional, dedupe por lead, Contact/Company e Opportunity.
 2. Pipeline/Stage com constraints de mesmo pipeline e escopo, arquivamento e posição.
@@ -79,6 +79,8 @@ Evidência de 2026-10-07: instalação congelada, lint, typecheck, test, test:in
 4. Kanban com mutation autorizada, optimistic update/rollback e resposta de conflito.
 
 Gate: pipeline e movimentação testados, histórico+estado atômicos, corrida/dupla conversão não duplica; OWN/filiais respeitados. Outbox entra nesta fase apenas se existir consumidor concreto do efeito; não construir framework de eventos por antecipação.
+
+Evidência de 2026-10-07: instalação congelada, lint, typecheck, test, test:integration, build e test:e2e passaram. **334 testes: 202 unitários (65 frontend/DOM incluídos), 10 HTTP, 96 integrações PostgreSQL/Redis e 26 E2E Chromium**. Os 270 cenários anteriores foram preservados. Sete migrations aplicadas em PostgreSQL limpo e seed repetido; o banco local da fase 5 recebeu somente a migration incremental, sem reset. Conversão concorrente entre atores distintos retorna a mesma oportunidade; conflito reverte cadastros parciais. Movimentação concorrente entre atores distintos grava um único estado/histórico por versão. FKs tenant/pipeline/etapa/owner, CHECKs monetários, quatro scopes, grants sem combinação indevida, associações ocultas e histórico de transferência foram cobertos. UI real cobre configuração/reordenação, qualificação/conversão, valor decimal, perda com motivo, reabertura, drag/botão e rollback otimista. Jornada e cinco larguras passaram com axe e console limpo. pnpm dev iniciou web/API/worker; health/live/ready, Swagger/OpenAPI, login/contexto/logout, seis páginas/listas autenticadas e job técnico passaram. Seed duas vezes manteve zero Contact/Company/Tag/Lead/Pipeline/Opportunity no banco principal. Logs e 32 artefatos JavaScript públicos foram conferidos sem secrets locais. ADR-015 registra as decisões; nenhuma nova dependência, queue, outbox ou funcionalidade da fase 7 foi introduzida.
 
 ## Fase 7 — Tarefas, follow-ups e timeline
 
@@ -165,4 +167,4 @@ Gate: evidência de restore e reconciliação, incidentes simulados, limites por
 | SLA, retenção, bases legais e HA                       | refinados ao longo das features, obrigatórios antes de produção              |
 | ERP não detalhado em requisitos                        | incremento separado, depois de contrato e processo comercial definidos       |
 
-Cada conclusão exige evidência dos gates acima. As fases 0–5 estão encerradas. A fase 6 exige autorização explícita. Não antecipar os demais módulos comerciais.
+Cada conclusão exige evidência dos gates acima. As fases 0–6 estão encerradas. A fase 7 exige autorização explícita. Não antecipar os demais módulos comerciais.

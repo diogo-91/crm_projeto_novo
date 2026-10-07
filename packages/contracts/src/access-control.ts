@@ -21,6 +21,20 @@ export const permissionCodes = [
   'companies.assign',
   'tags.read',
   'tags.manage',
+  'leads.read',
+  'leads.create',
+  'leads.update',
+  'leads.delete',
+  'leads.assign',
+  'leads.convert',
+  'pipelines.read',
+  'pipelines.manage',
+  'opportunities.read',
+  'opportunities.create',
+  'opportunities.update',
+  'opportunities.delete',
+  'opportunities.assign',
+  'opportunities.move',
 ] as const;
 export const permissionCodeSchema = z.enum(permissionCodes);
 export type PermissionCode = z.infer<typeof permissionCodeSchema>;

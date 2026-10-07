@@ -12,17 +12,7 @@ import { CompanyPicker } from '@/features/commercial/company-picker';
 import { TagPicker } from './tag-picker';
 import { usePermission } from '@/features/auth/auth-provider';
 import { ApiError, errorMessage } from '@/lib/api-client';
-export const sourceLabels: Record<CreateContact['source'], string> = {
-  MANUAL: 'Manual',
-  WHATSAPP: 'WhatsApp',
-  MARKETPLACE: 'Marketplace',
-  WEBSITE: 'Site',
-  REFERRAL: 'Indicação',
-  OUTBOUND: 'Prospecção',
-  PHONE: 'Telefone',
-  IMPORT: 'Importação',
-  OTHER: 'Outro',
-};
+import { sourceLabels } from '@/features/commercial/source-labels';
 type Input = z.input<typeof createContactSchema>;
 export function ContactForm({
   record,

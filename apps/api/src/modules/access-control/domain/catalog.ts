@@ -5,12 +5,25 @@ export const catalog = permissionCodes.map((code) => ({
   description: code,
   domain: code === 'organizations.create' ? ('PLATFORM' as const) : ('ORGANIZATION' as const),
 }));
-const commercialRead: PermissionCode[] = ['contacts.read', 'companies.read', 'tags.read'];
+const commercialRead: PermissionCode[] = [
+  'contacts.read',
+  'companies.read',
+  'tags.read',
+  'leads.read',
+  'pipelines.read',
+  'opportunities.read',
+];
 const commercialWrite: PermissionCode[] = [
   'contacts.create',
   'contacts.update',
   'companies.create',
   'companies.update',
+  'leads.create',
+  'leads.update',
+  'leads.convert',
+  'opportunities.create',
+  'opportunities.update',
+  'opportunities.move',
 ];
 const read: PermissionCode[] = ['organizations.read', 'branches.read', 'users.read', 'roles.read'];
 export const templates: { code: string; name: string; permissions: PermissionCode[] }[] = [
@@ -28,6 +41,9 @@ export const templates: { code: string; name: string; permissions: PermissionCod
       ...commercialWrite,
       'contacts.assign',
       'companies.assign',
+      'leads.assign',
+      'opportunities.assign',
+      'pipelines.manage',
       'branches.manage',
       'users.manage',
     ],
@@ -41,6 +57,8 @@ export const templates: { code: string; name: string; permissions: PermissionCod
       ...commercialWrite,
       'contacts.assign',
       'companies.assign',
+      'leads.assign',
+      'opportunities.assign',
     ],
   },
   {
@@ -57,6 +75,9 @@ export const templates: { code: string; name: string; permissions: PermissionCod
       ...commercialRead,
       'contacts.update',
       'companies.update',
+      'leads.update',
+      'opportunities.update',
+      'opportunities.move',
     ],
   },
   { code: 'VIEWER', name: 'Visualizador', permissions: [...read, ...commercialRead] },

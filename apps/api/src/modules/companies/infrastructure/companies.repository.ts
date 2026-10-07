@@ -162,37 +162,35 @@ export class CompaniesRepository {
           'companies.create',
           'collection',
         );
-        const ownerMembershipId = input.ownerMembershipId ?? fresh.membershipId;
-        this.destination(fresh, 'companies.create', input.branchId, ownerMembershipId);
-        if (ownerMembershipId !== fresh.membershipId)
-          this.destination(fresh, 'companies.assign', input.branchId, ownerMembershipId);
-        await this.directory.assignment(
-          tx,
-          fresh.organizationId,
-          input.branchId,
-          ownerMembershipId,
-        );
-        const row = await tx.company.create({
-          data: {
-            organizationId: fresh.organizationId,
-            branchId: input.branchId,
-            ownerMembershipId,
-            name: input.name,
-            phone: input.phone ?? null,
-            normalizedPhone: input.phone ? normalizePhone(input.phone) : null,
-            email: input.email ?? null,
-            document: input.document ?? null,
-            normalizedDocument: input.document ? normalizeDocument(input.document) : null,
-            legalName: input.legalName ?? null,
-            notes: input.notes ?? null,
-            createdByMembershipId: fresh.membershipId,
-            updatedByMembershipId: fresh.membershipId,
-          },
-          select: columns,
-        });
-        return this.response(tx, fresh, row);
+        return this.createInTransaction(tx, fresh, input);
       }),
     );
+  }
+  async createInTransaction(tx: DatabaseTransaction, context: TenantContext, input: CreateCompany) {
+    const ownerMembershipId = input.ownerMembershipId ?? context.membershipId;
+    this.destination(context, 'companies.create', input.branchId, ownerMembershipId);
+    if (ownerMembershipId !== context.membershipId)
+      this.destination(context, 'companies.assign', input.branchId, ownerMembershipId);
+    await this.directory.assignment(tx, context.organizationId, input.branchId, ownerMembershipId);
+    const row = await tx.company.create({
+      data: {
+        organizationId: context.organizationId,
+        branchId: input.branchId,
+        ownerMembershipId,
+        name: input.name,
+        phone: input.phone ?? null,
+        normalizedPhone: input.phone ? normalizePhone(input.phone) : null,
+        email: input.email ?? null,
+        document: input.document ?? null,
+        normalizedDocument: input.document ? normalizeDocument(input.document) : null,
+        legalName: input.legalName ?? null,
+        notes: input.notes ?? null,
+        createdByMembershipId: context.membershipId,
+        updatedByMembershipId: context.membershipId,
+      },
+      select: columns,
+    });
+    return this.response(tx, context, row);
   }
   update(context: TenantContext, id: string, input: UpdateCompany) {
     return this.change(context, id, input.expectedVersion, 'companies.update', input);

@@ -2,7 +2,7 @@
 
 ## Estado e objetivo
 
-Este repositório inicia um CRM comercial multiempresa e multiloja. A fase 0 definiu os documentos. A fase 1 criou a fundação técnica. A fase 2 adiciona Organization, Branch, User global, OrganizationMembership e MembershipBranch, com API estrutural mínima local. A fase 3 implementa credenciais Argon2id, JWT curto, sessões/refresh rotativos e RBAC com escopos. A fase 4 adiciona design system, layout responsivo, páginas-base e integração web de sessão. A fase 5 implementa Contacts, Companies e Tags com escopos, carteira/filial, histórico mínimo de transferências e UI funcional. A exceção de endpoints administrativos públicos do ADR-011 foi encerrada pelo ADR-012. Consulte README.md para instalação e operação. Não confundir decisões planejadas com funcionalidades implementadas. Implementar somente a etapa explicitamente autorizada pelo solicitante; não antecipar telas, CRUDs, autenticação ou integrações.
+Este repositório inicia um CRM comercial multiempresa e multiloja. A fase 0 definiu os documentos. A fase 1 criou a fundação técnica. A fase 2 adiciona Organization, Branch, User global, OrganizationMembership e MembershipBranch, com API estrutural mínima local. A fase 3 implementa credenciais Argon2id, JWT curto, sessões/refresh rotativos e RBAC com escopos. A fase 4 adiciona design system, layout responsivo, páginas-base e integração web de sessão. A fase 5 implementa Contacts, Companies e Tags com escopos, carteira/filial, histórico mínimo de transferências e UI funcional. A fase 6 implementa leads, conversão transacional, pipelines/etapas configuráveis, oportunidades com histórico atômico e Kanban autorizado. As fases 0–6 estão concluídas; a fase 7 exige nova solicitação. A exceção de endpoints administrativos públicos do ADR-011 foi encerrada pelo ADR-012. Consulte README.md para instalação e operação. Não confundir decisões planejadas com funcionalidades implementadas. Implementar somente a etapa explicitamente autorizada pelo solicitante; não antecipar telas, CRUDs, autenticação ou integrações.
 
 Ler antes de alterar o projeto:
 
@@ -108,7 +108,7 @@ Migrations são versionadas e revisadas junto ao schema. Prisma gera alteraçõe
 
 Verificar limites dos módulos, isolamento por organização/filial, autorização do recurso, integridade referencial, concorrência, idempotência, compatibilidade de contratos, logs sem secrets e consultas com índices. Atualizar documentação e ADR quando uma decisão mudar. Não corrigir uma arquitetura por meio de dependência circular ou dependência nova sem necessidade comprovada.
 
-No estágio atual, a fase 5 autorizada compreende somente clientes, empresas e tags. Não iniciar fase 6, leads, pipeline, recuperação de senha ou WhatsApp sem nova solicitação. Não usar any, supressões TypeScript/ESLint, monkey patch, erro silencioso, fallback de infraestrutura, peers forçados ou exclusão de apps do build para contornar problemas. Corrigir a causa, revalidar e documentar decisões em ADR.
+No estágio atual, a fase 6 está concluída e compreende leads, conversão, pipelines/etapas, oportunidades e Kanban. Não iniciar fase 7, tarefas, notificações, recuperação de senha ou WhatsApp sem nova solicitação. Não usar any, supressões TypeScript/ESLint, monkey patch, erro silencioso, fallback de infraestrutura, peers forçados ou exclusão de apps do build para contornar problemas. Corrigir a causa, revalidar e documentar decisões em ADR.
 
 ## Fundação organizacional implementada
 
@@ -147,3 +147,13 @@ Organizations usa camadas domain/application/infrastructure/presentation; owns O
 - cacheScopeKey é metadado servidor de grants/filiais para invalidar cache quando o contexto atualizado chega; não é credencial nem autorização. Contratos estritos exigem release coordenado API/web.
 - Seed atualiza catálogo e templates da demo idempotentemente, sem criar clientes/empresas/tags fictícios e sem conceder privilégios globais a outros tenants. Migrations contêm somente estrutura/constraints.
 - Fixtures e screenshots comerciais são sintéticos/isolados e ignorados pelo Git. Não antecipar módulos futuros, auditoria completa, eventos, filas comerciais ou outbox sem consumidor.
+
+## Fundação de vendas — fase 6
+
+- Leia ADR-015. Leads, Pipelines e Opportunities possuem seus dados; conversão usa gateways públicos e uma transação, sem repositórios alheios/ciclos. Criação HTTP e gateway compartilham a mesma implementação.
+- Lead qualificado/ativo converte uma vez: lock+unique tenant/lead+hash da intenção; retry equivalente revalida autorização e devolve o mesmo resultado, intento diferente 409. Preserve a distinção entre relação omitida e null. Não associar cliente oculto por telefone/e-mail nem criar cadastros parciais.
+- Pipeline é catálogo com filial opcional. Leitura tem política própria por grant; manage exige scope ORGANIZATION para a ação. Etapa kind imutável, pelo menos uma OPEN ativa, máximo 30, ordem por posição/UUID e reorder completo sob lock+Pipeline.version.
+- Opportunity exige FKs tenant/filial/owner/pipeline/etapa, numeric(19,4) string e moeda explícita. PATCH não altera pipeline/status/etapa. Mover exige expectedVersion e grava estado/histórico atomicamente; LOST exige motivo, OPEN limpa fechamento. Históricos preservam nomes na ocorrência e paginam por recordVersion.
+- Kanban carrega 25 oportunidades por coluna com scope no SQL, mutation autorizada/otimista/snapshot/rollback/refetch e ação por teclado equivalente a drag. Nunca usar lista parcial como total nem filtrar tenant apenas na web.
+- Migrations continuam sem concessões globais de permissões. Seed atualiza somente demo; novos templates no provisionamento autorizado. Não criar outbox/filas sem consumidor nesta fase.
+- Executar comandos de validação que geram/buildam packages em sequência: processos pnpm separados não coordenam escrita do Prisma Client entre si. Dentro de cada comando, o grafo Turborepo conserva dependências.

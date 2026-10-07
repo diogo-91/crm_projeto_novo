@@ -42,7 +42,7 @@ PostgreSQL e Redis rodam em Docker; web/API/worker rodam diretamente por pnpm, c
 | Swagger UI                   | http://localhost:3001/docs              |
 | OpenAPI JSON                 | http://localhost:3001/docs/openapi.json |
 
-Estes endereços são instruções para executar o projeto **localmente**, não previews publicados do ambiente em nuvem. A aplicação possui login e cadastros de clientes, empresas e tags. Outros módulos mantêm páginas-base claramente identificadas, sem métricas ou dados comerciais fictícios.
+Estes endereços são instruções para executar o projeto **localmente**, não previews publicados do ambiente em nuvem. A aplicação possui login, clientes, empresas, tags, leads, oportunidades e pipelines. Outros módulos mantêm páginas-base claramente identificadas, sem métricas ou dados comerciais fictícios.
 
 ## Configuração
 
@@ -186,7 +186,7 @@ Variáveis novas (validadas apenas onde necessárias):
 
 Para um clone novo, pnpm env:init gera secrets privados e aleatórios. Para instalação existente, preencha as novas variáveis em .env sem mudar as senhas PostgreSQL/Redis já usadas pelos volumes. Secrets da API não são exigidos nem enviados ao worker. Argon2id 0.45.1 e JOSE 6.2.12 são compatíveis com Node 24; não há adaptador JWT concorrente, pacote cookie-parser ou fornecedor de e-mail antecipado. pnpm allowBuilds autoriza o addon oficial Argon2.
 
-Seed não redefine senha existente nem duplica roles/permissões/grants. Para trocar senha use o endpoint autenticado; senha demo só existe em desenvolvimento/testes e seed recusa production. Templates tenant: ADMIN, DIRECTOR, SALES_MANAGER, SELLER, AFTER_SALES, VIEWER. Catálogo atual de 20 permissões implementadas: oito estruturais e doze comerciais (fase 5). Não existe SUPER_ADMIN global. Para validar criação de novas organizações localmente, habilite SEED_PLATFORM_PROVISIONING=true antes do seed; não transforma ADMIN em administrador de outros tenants.
+Seed não redefine senha existente nem duplica roles/permissões/grants. Para trocar senha use o endpoint autenticado; senha demo só existe em desenvolvimento/testes e seed recusa production. Templates tenant: ADMIN, DIRECTOR, SALES_MANAGER, SELLER, AFTER_SALES, VIEWER. Catálogo atual de 34 permissões implementadas: oito estruturais, doze comerciais da fase 5 e quatorze da fase 6. Não existe SUPER_ADMIN global. Para validar criação de novas organizações localmente, habilite SEED_PLATFORM_PROVISIONING=true antes do seed; não transforma ADMIN em administrador de outros tenants.
 
 | Método/rota sob /api/v1                                                             | Proteção/efeito                                                                     |
 | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
@@ -325,4 +325,38 @@ pnpm test:e2e
 
 Instale o browser por `pnpm exec playwright install --with-deps chromium` ou use `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` conforme a instalação local documentada na fase 4. Integração/E2E usam projetos Compose próprios e removem só seus bancos/fixtures. Nenhum fluxo comercial depende de dados mockados no ambiente principal. Não há leads, pipeline, importações, WhatsApp, automações, dashboards reais ou IA nesta fase.
 
-Evidência final de **2026-10-07**: todos os comandos acima passaram. **270 testes**: 161 unitários (58 frontend/DOM incluídos), 10 HTTP, 79 integrações e 20 E2E; nenhum cenário anterior removido. Instalação limpa com seis migrations e seed repetido passou nos bancos isolados. O banco local anterior recebeu as duas migrations novas; repetição do seed preservou IDs/vínculos e manteve zero Contact/Company/Tag. pnpm dev iniciou os três processos: health/live/ready, Swagger/OpenAPI comercial, login/contexto/logout, listas autenticadas e job técnico pelo worker passaram. Browser em desenvolvimento confirmou clientes, empresas e tags, sem erros de console/hydration. Logs e 28 artefatos públicos foram conferidos sem secrets do servidor; .env permanece 0600/ignorado. O CI existente executa as suites ampliadas sem retirar checks; execução remota não foi verificada nesta sessão. A fase 5 está concluída; a fase 6 exige nova autorização.
+Evidência final de **2026-10-07**: todos os comandos acima passaram. **270 testes**: 161 unitários (58 frontend/DOM incluídos), 10 HTTP, 79 integrações e 20 E2E; nenhum cenário anterior removido. Instalação limpa com seis migrations e seed repetido passou nos bancos isolados. O banco local anterior recebeu as duas migrations novas; repetição do seed preservou IDs/vínculos e manteve zero Contact/Company/Tag. pnpm dev iniciou os três processos: health/live/ready, Swagger/OpenAPI comercial, login/contexto/logout, listas autenticadas e job técnico pelo worker passaram. Browser em desenvolvimento confirmou clientes, empresas e tags, sem erros de console/hydration. Logs e 28 artefatos públicos foram conferidos sem secrets do servidor; .env permanece 0600/ignorado. O CI existente executa as suites ampliadas sem retirar checks; execução remota não foi verificada nesta sessão. Esta é a evidência histórica da fase 5; a conclusão da fase 6 está registrada abaixo.
+
+## Leads e pipeline — fase 6
+
+Após atualizar o banco com `pnpm db:migrate` e executar `pnpm db:seed`, entre com o admin demo. O banco começa sem leads/pipelines/oportunidades fictícios. Em `/pipeline`, crie um pipeline com ao menos uma etapa aberta; configure nomes, ordem e ativação das etapas. As etapas possuem resultados Aberta/Ganha/Perdida, fixos após criação. Pipeline pode ser organizacional ou de uma filial; catálogo e dados comerciais continuam protegidos pelos scopes reais.
+
+Em `/leads`, cadastre o interesse, filial e responsável. Abra a ficha, edite Qualificação para Qualificado e use Converter lead. Selecione pipeline/etapa aberta, valor decimal em string e moeda. Criação de cliente exige telefone; criação de empresa exige nome da empresa prospectada. Também pode selecionar registros existentes visíveis; não existe associação automática por telefone. Conflito gera rollback completo, e retries iguais retornam a mesma oportunidade. Lead convertido não pode ser editado novamente.
+
+`/crm` lista oportunidades, `/crm/[id]` mostra ficha e histórico ordenado. Em `/pipeline`, arraste ou use Mover para confirmar o destino; uma etapa Perdida exige motivo. Movimentações para etapa aberta reabrem a oportunidade; ganhas/perdidas possuem fechamento. O Kanban pagina 25 itens por coluna, permite carregar mais e mantém filtro de filial/responsável/busca no servidor. Nenhum total é inferido de uma página parcial. Falhas/conflicts revertem a atualização otimista e refazem leitura. Configuração do pipeline usa a versão do pipeline; oportunidade usa sua própria versão.
+
+Endpoints implementados sob `/api/v1` (sessão Bearer + contexto + permission/scope):
+
+| Recurso                    | Rotas                                                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Leads                      | POST/GET `/leads`; GET/PATCH/DELETE `/leads/:id`                                                           |
+| Atribuição de lead         | GET `/leads/assignment-branches`; GET `/leads/assignment-owners` com action                                |
+| Conversão                  | POST `/leads/:id/convert`                                                                                  |
+| Pipelines                  | POST/GET `/pipelines`; GET/PATCH/DELETE `/pipelines/:id`                                                   |
+| Etapas                     | POST `/pipelines/:id/stages`; PATCH `/pipelines/:id/stages/:stageId`; POST `/pipelines/:id/stages/reorder` |
+| Oportunidades              | POST/GET `/opportunities`; GET/PATCH/DELETE `/opportunities/:id`                                           |
+| Atribuição de oportunidade | GET `/opportunities/assignment-branches`; GET `/opportunities/assignment-owners` com action                |
+| Movimentação               | POST `/opportunities/:id/stage`                                                                            |
+| Histórico mínimo           | GET `/opportunities/:id/stage-history` paginado por recordVersion                                          |
+
+POST de recurso retorna 201; conversão, movimentação e mudanças de configuração de etapas retornam 200. PATCH/DELETE/ações exigem expectedVersion; DELETE desativa/arquiva sem apagar relações. Pipeline não muda no PATCH da oportunidade. Dados monetários aceitam até 15 dígitos inteiros e quatro decimais; BRL/USD/EUR/GBP são as moedas suportadas inicialmente. Não há conversão cambial ou cálculo financeiro por number. Swagger `/docs` documenta contratos reais e erros 400/401/403/404/409.
+
+Migration nova: `20261007150000_create_leads_pipelines_opportunities`, total sete. Preserve os volumes existentes e o histórico aplicado. Catálogo passa a 34 permissões (oito estruturais, doze da fase 5, quatorze da fase 6); consulte ADR-015 para matriz. Seed atualiza templates **apenas na organização demo**; tenants anteriores fora da demo precisam de concessão explícita pelo mecanismo administrativo existente. Nenhuma migration amplia grants automaticamente.
+
+As validações continuam `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm test:integration`, `pnpm build`, `pnpm test:e2e`. Integração usa PostgreSQL/Redis descartáveis e aplica toda a cadeia; browser usa API real. Sem nova dependência, serviço ou variável de ambiente. Não implementa fase 7 ou integrações externas.
+
+### Validação final da fase 6
+
+Evidência de **2026-10-07**: instalação congelada, lint, typecheck, test, test:integration, build e test:e2e passaram. **334 testes**: 202 unitários (65 frontend/DOM incluídos), 10 HTTP, 96 integrações reais PostgreSQL/Redis e 26 jornadas E2E Chromium. Os 270 cenários anteriores foram preservados. Sete migrations aplicadas desde zero e seed repetido nos bancos isolados; atualização incremental do banco local e seed duas vezes sem reset ou dados comerciais fictícios. Corridas de conversão/movimentação entre atores diferentes, FKs e scopes tenant/filial/carteira, rollback, decimal, configuração de etapas e histórico atômico passaram.
+
+pnpm dev iniciou web/API/worker; health/live/ready, Swagger/OpenAPI, login/contexto/logout, seis páginas/listas autenticadas e job técnico pelo worker foram conferidos. Navegador em desenvolvimento sem erros de aplicação/hydration; jornadas E2E com axe e 375/768/1024/1440/1920px. Logs e 32 artefatos JavaScript públicos conferidos sem secrets locais; .env 0600/ignorado. CI mantém seus checks e executa as suites ampliadas; execução remota não foi verificada nesta sessão. Sem alteração de dependências ou configuração de ambiente. Nenhuma dívida técnica consciente introduzida nesta etapa. Não foram utilizados remendos ou workarounds. A fase 6 está concluída; a fase 7 exige nova solicitação.

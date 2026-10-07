@@ -24,7 +24,8 @@ import { RecordDialog } from '@/features/commercial/record-dialog';
 import { CompanyPicker } from '@/features/commercial/company-picker';
 import { PageHeader } from '@/components/layout/page-header';
 import { usePermission } from '@/features/auth/auth-provider';
-import { ContactForm, sourceLabels } from './contact-form';
+import { ContactForm } from './contact-form';
+import { sourceLabels } from '@/features/commercial/source-labels';
 import { contactSources } from '@crm/contracts';
 export function ContactList({
   companyId,

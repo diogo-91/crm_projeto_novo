@@ -19,36 +19,46 @@ model InfrastructureMetadata {
 }
 
 model Organization {
-  id          String                   @id @default(uuid()) @db.Uuid
-  name        String                   @db.VarChar(160)
-  legalName   String?                  @map("legal_name") @db.VarChar(200)
-  document    String?                  @db.VarChar(64)
-  active      Boolean                  @default(true)
-  createdAt   DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
-  contacts    Contact[]
-  companies   Company[]
-  tags        Tag[]
-  roles       Role[]
-  branches    Branch[]
-  memberships OrganizationMembership[]
+  leads         Lead[]
+  pipelines     Pipeline[]
+  opportunities Opportunity[]
+  id            String                   @id @default(uuid()) @db.Uuid
+  name          String                   @db.VarChar(160)
+  legalName     String?                  @map("legal_name") @db.VarChar(200)
+  document      String?                  @db.VarChar(64)
+  active        Boolean                  @default(true)
+  createdAt     DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  contacts      Contact[]
+  companies     Company[]
+  tags          Tag[]
+  roles         Role[]
+  branches      Branch[]
+  memberships   OrganizationMembership[]
 
   @@map("organizations")
 }
 
 model Branch {
-  companyHistoryBranchTo   CompanyAssignmentHistory[] @relation("CompanyHistoryBranchTo")
-  companyHistoryBranchFrom CompanyAssignmentHistory[] @relation("CompanyHistoryBranchFrom")
-  contactHistoryBranchTo   ContactAssignmentHistory[] @relation("ContactHistoryBranchTo")
-  contactHistoryBranchFrom ContactAssignmentHistory[] @relation("ContactHistoryBranchFrom")
-  id                       String                     @id @default(uuid()) @db.Uuid
-  organizationId           String                     @map("organization_id") @db.Uuid
-  name                     String                     @db.VarChar(160)
-  code                     String                     @db.VarChar(64)
-  active                   Boolean                    @default(true)
-  createdAt                DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt                DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
-  organization             Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  opportunityHistoryFrom   OpportunityAssignmentHistory[] @relation("OpportunityHistoryBranchFrom")
+  opportunityHistoryTo     OpportunityAssignmentHistory[] @relation("OpportunityHistoryBranchTo")
+  leadHistoryFrom          LeadAssignmentHistory[]        @relation("LeadHistoryBranchFrom")
+  leadHistoryTo            LeadAssignmentHistory[]        @relation("LeadHistoryBranchTo")
+  leads                    Lead[]
+  pipelines                Pipeline[]
+  opportunities            Opportunity[]
+  companyHistoryBranchTo   CompanyAssignmentHistory[]     @relation("CompanyHistoryBranchTo")
+  companyHistoryBranchFrom CompanyAssignmentHistory[]     @relation("CompanyHistoryBranchFrom")
+  contactHistoryBranchTo   ContactAssignmentHistory[]     @relation("ContactHistoryBranchTo")
+  contactHistoryBranchFrom ContactAssignmentHistory[]     @relation("ContactHistoryBranchFrom")
+  id                       String                         @id @default(uuid()) @db.Uuid
+  organizationId           String                         @map("organization_id") @db.Uuid
+  name                     String                         @db.VarChar(160)
+  code                     String                         @db.VarChar(64)
+  active                   Boolean                        @default(true)
+  createdAt                DateTime                       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime                       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization             Organization                   @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   contacts                 Contact[]
   companies                Company[]
   memberships              MembershipBranch[]
@@ -75,29 +85,40 @@ model User {
 }
 
 model OrganizationMembership {
-  companyHistoryActor     CompanyAssignmentHistory[] @relation("CompanyHistoryActor")
-  companyHistoryOwnerTo   CompanyAssignmentHistory[] @relation("CompanyHistoryOwnerTo")
-  companyHistoryOwnerFrom CompanyAssignmentHistory[] @relation("CompanyHistoryOwnerFrom")
-  contactHistoryActor     ContactAssignmentHistory[] @relation("ContactHistoryActor")
-  contactHistoryOwnerTo   ContactAssignmentHistory[] @relation("ContactHistoryOwnerTo")
-  contactHistoryOwnerFrom ContactAssignmentHistory[] @relation("ContactHistoryOwnerFrom")
-  id                      String                     @id @default(uuid()) @db.Uuid
-  organizationId          String                     @map("organization_id") @db.Uuid
-  userId                  String                     @map("user_id") @db.Uuid
-  primaryBranchId         String?                    @map("primary_branch_id") @db.Uuid
-  active                  Boolean                    @default(true)
-  createdAt               DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt               DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
-  organization            Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  user                    User                       @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  branches                MembershipBranch[]         @relation("MembershipBranches")
+  opportunityHistoryActor OpportunityAssignmentHistory[] @relation("OpportunityHistoryActor")
+  opportunityHistoryFrom  OpportunityAssignmentHistory[] @relation("OpportunityHistoryOwnerFrom")
+  opportunityHistoryTo    OpportunityAssignmentHistory[] @relation("OpportunityHistoryOwnerTo")
+  leadHistoryActor        LeadAssignmentHistory[]        @relation("LeadHistoryActor")
+  leadHistoryFrom         LeadAssignmentHistory[]        @relation("LeadHistoryOwnerFrom")
+  leadHistoryTo           LeadAssignmentHistory[]        @relation("LeadHistoryOwnerTo")
+  createdLeads            Lead[]                         @relation("LeadCreator")
+  updatedLeads            Lead[]                         @relation("LeadUpdater")
+  createdOpportunities    Opportunity[]                  @relation("OpportunityCreator")
+  updatedOpportunities    Opportunity[]                  @relation("OpportunityUpdater")
+  opportunityStageHistory OpportunityStageHistory[]      @relation("StageHistoryActor")
+  companyHistoryActor     CompanyAssignmentHistory[]     @relation("CompanyHistoryActor")
+  companyHistoryOwnerTo   CompanyAssignmentHistory[]     @relation("CompanyHistoryOwnerTo")
+  companyHistoryOwnerFrom CompanyAssignmentHistory[]     @relation("CompanyHistoryOwnerFrom")
+  contactHistoryActor     ContactAssignmentHistory[]     @relation("ContactHistoryActor")
+  contactHistoryOwnerTo   ContactAssignmentHistory[]     @relation("ContactHistoryOwnerTo")
+  contactHistoryOwnerFrom ContactAssignmentHistory[]     @relation("ContactHistoryOwnerFrom")
+  id                      String                         @id @default(uuid()) @db.Uuid
+  organizationId          String                         @map("organization_id") @db.Uuid
+  userId                  String                         @map("user_id") @db.Uuid
+  primaryBranchId         String?                        @map("primary_branch_id") @db.Uuid
+  active                  Boolean                        @default(true)
+  createdAt               DateTime                       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime                       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization            Organization                   @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user                    User                           @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  branches                MembershipBranch[]             @relation("MembershipBranches")
   userRoles               UserRole[]
   sessions                Session[]
-  createdContacts         Contact[]                  @relation("ContactCreator")
-  updatedContacts         Contact[]                  @relation("ContactUpdater")
-  createdCompanies        Company[]                  @relation("CompanyCreator")
-  updatedCompanies        Company[]                  @relation("CompanyUpdater")
-  primaryBranch           MembershipBranch?          @relation("PrimaryBranch", fields: [organizationId, id, primaryBranchId], references: [organizationId, membershipId, branchId], onDelete: Restrict, onUpdate: Restrict)
+  createdContacts         Contact[]                      @relation("ContactCreator")
+  updatedContacts         Contact[]                      @relation("ContactUpdater")
+  createdCompanies        Company[]                      @relation("CompanyCreator")
+  updatedCompanies        Company[]                      @relation("CompanyUpdater")
+  primaryBranch           MembershipBranch?              @relation("PrimaryBranch", fields: [organizationId, id, primaryBranchId], references: [organizationId, membershipId, branchId], onDelete: Restrict, onUpdate: Restrict)
 
   @@unique([organizationId, id])
   @@unique([organizationId, userId])
@@ -107,18 +128,20 @@ model OrganizationMembership {
 }
 
 model MembershipBranch {
-  id             String                   @id @default(uuid()) @db.Uuid
-  organizationId String                   @map("organization_id") @db.Uuid
-  membershipId   String                   @map("membership_id") @db.Uuid
-  branchId       String                   @map("branch_id") @db.Uuid
-  createdAt      DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
-  membership     OrganizationMembership   @relation("MembershipBranches", fields: [organizationId, membershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
-  branch         Branch                   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
-  ownedContacts  Contact[]
-  ownedCompanies Company[]
-  roleBranches   UserRoleBranch[]
-  primaryFor     OrganizationMembership[] @relation("PrimaryBranch")
+  ownedLeads         Lead[]
+  ownedOpportunities Opportunity[]
+  id                 String                   @id @default(uuid()) @db.Uuid
+  organizationId     String                   @map("organization_id") @db.Uuid
+  membershipId       String                   @map("membership_id") @db.Uuid
+  branchId           String                   @map("branch_id") @db.Uuid
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  membership         OrganizationMembership   @relation("MembershipBranches", fields: [organizationId, membershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  branch             Branch                   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  ownedContacts      Contact[]
+  ownedCompanies     Company[]
+  roleBranches       UserRoleBranch[]
+  primaryFor         OrganizationMembership[] @relation("PrimaryBranch")
 
   @@unique([organizationId, membershipId, branchId])
   @@index([organizationId, branchId])
@@ -266,6 +289,8 @@ model RefreshToken {
 }
 
 model Company {
+  leads                 Lead[]
+  opportunities         Opportunity[]
   assignmentHistory     CompanyAssignmentHistory[]
   id                    String                     @id @default(uuid()) @db.Uuid
   organizationId        String                     @map("organization_id") @db.Uuid
@@ -303,6 +328,8 @@ model Company {
 }
 
 model Contact {
+  leads                 Lead[]
+  opportunities         Opportunity[]
   assignmentHistory     ContactAssignmentHistory[]
   id                    String                     @id @default(uuid()) @db.Uuid
   organizationId        String                     @map("organization_id") @db.Uuid
@@ -427,4 +454,221 @@ model CompanyAssignmentHistory {
 
   @@unique([organizationId, companyId, recordVersion])
   @@map("company_assignment_history")
+}
+
+enum LeadStatus {
+  NEW
+  QUALIFIED
+  DISQUALIFIED
+  CONVERTED
+}
+
+enum DealStatus {
+  OPEN
+  WON
+  LOST
+}
+
+model Pipeline {
+  id             String                    @id @default(uuid()) @db.Uuid
+  organizationId String                    @map("organization_id") @db.Uuid
+  branchId       String?                   @map("branch_id") @db.Uuid
+  name           String                    @db.VarChar(160)
+  normalizedName String                    @map("normalized_name") @db.VarChar(160)
+  active         Boolean                   @default(true)
+  version        Int                       @default(1)
+  createdAt      DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  branch         Branch?                   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  stages         PipelineStage[]
+  opportunities  Opportunity[]
+  historyFrom    OpportunityStageHistory[] @relation("HistoryPipelineFrom")
+  historyTo      OpportunityStageHistory[] @relation("HistoryPipelineTo")
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, normalizedName])
+  @@index([organizationId, branchId, id])
+  @@map("pipelines")
+}
+
+model PipelineStage {
+  id             String                    @id @default(uuid()) @db.Uuid
+  organizationId String                    @map("organization_id") @db.Uuid
+  pipelineId     String                    @map("pipeline_id") @db.Uuid
+  name           String                    @db.VarChar(160)
+  normalizedName String                    @map("normalized_name") @db.VarChar(160)
+  kind           DealStatus                @default(OPEN)
+  position       Int
+  active         Boolean                   @default(true)
+  pipeline       Pipeline                  @relation(fields: [organizationId, pipelineId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  opportunities  Opportunity[]
+  historyFrom    OpportunityStageHistory[] @relation("HistoryStageFrom")
+  historyTo      OpportunityStageHistory[] @relation("HistoryStageTo")
+
+  @@unique([organizationId, pipelineId, id])
+  @@unique([organizationId, pipelineId, id, kind])
+  @@unique([organizationId, pipelineId, normalizedName])
+  @@index([organizationId, pipelineId, position, id])
+  @@map("pipeline_stages")
+}
+
+model Lead {
+  id                    String                  @id @default(uuid()) @db.Uuid
+  organizationId        String                  @map("organization_id") @db.Uuid
+  branchId              String                  @map("branch_id") @db.Uuid
+  ownerMembershipId     String                  @map("owner_membership_id") @db.Uuid
+  name                  String                  @db.VarChar(160)
+  notes                 String?                 @db.VarChar(4000)
+  contactId             String?                 @map("contact_id") @db.Uuid
+  companyId             String?                 @map("company_id") @db.Uuid
+  active                Boolean                 @default(true)
+  version               Int                     @default(1)
+  createdByMembershipId String                  @map("created_by_membership_id") @db.Uuid
+  updatedByMembershipId String                  @map("updated_by_membership_id") @db.Uuid
+  createdAt             DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization          Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  branch                Branch                  @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  owner                 MembershipBranch        @relation(fields: [organizationId, ownerMembershipId, branchId], references: [organizationId, membershipId, branchId], onDelete: Restrict, onUpdate: Restrict)
+  creator               OrganizationMembership  @relation("LeadCreator", fields: [organizationId, createdByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  updater               OrganizationMembership  @relation("LeadUpdater", fields: [organizationId, updatedByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  contact               Contact?                @relation(fields: [organizationId, contactId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  company               Company?                @relation(fields: [organizationId, companyId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  assignmentHistory     LeadAssignmentHistory[]
+  phone                 String?                 @db.VarChar(64)
+  normalizedPhone       String?                 @map("normalized_phone") @db.VarChar(32)
+  email                 String?                 @db.VarChar(254)
+  companyName           String?                 @map("company_name") @db.VarChar(160)
+  source                ContactSource           @default(MANUAL)
+  status                LeadStatus              @default(NEW)
+  convertedAt           DateTime?               @map("converted_at") @db.Timestamptz(6)
+  conversionRequestHash String?                 @map("conversion_request_hash") @db.VarChar(64)
+  opportunity           Opportunity?
+
+  @@unique([organizationId, id])
+  @@index([organizationId, branchId, id])
+  @@index([organizationId, ownerMembershipId, id])
+  @@index([organizationId, createdAt, id])
+  @@index([organizationId, updatedAt, id])
+  @@index([organizationId, name, id])
+  @@map("leads")
+}
+
+model Opportunity {
+  id                    String                         @id @default(uuid()) @db.Uuid
+  organizationId        String                         @map("organization_id") @db.Uuid
+  branchId              String                         @map("branch_id") @db.Uuid
+  ownerMembershipId     String                         @map("owner_membership_id") @db.Uuid
+  name                  String                         @db.VarChar(160)
+  notes                 String?                        @db.VarChar(4000)
+  contactId             String?                        @map("contact_id") @db.Uuid
+  companyId             String?                        @map("company_id") @db.Uuid
+  active                Boolean                        @default(true)
+  version               Int                            @default(1)
+  createdByMembershipId String                         @map("created_by_membership_id") @db.Uuid
+  updatedByMembershipId String                         @map("updated_by_membership_id") @db.Uuid
+  createdAt             DateTime                       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime                       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization          Organization                   @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  branch                Branch                         @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  owner                 MembershipBranch               @relation(fields: [organizationId, ownerMembershipId, branchId], references: [organizationId, membershipId, branchId], onDelete: Restrict, onUpdate: Restrict)
+  creator               OrganizationMembership         @relation("OpportunityCreator", fields: [organizationId, createdByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  updater               OrganizationMembership         @relation("OpportunityUpdater", fields: [organizationId, updatedByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  contact               Contact?                       @relation(fields: [organizationId, contactId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  company               Company?                       @relation(fields: [organizationId, companyId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  assignmentHistory     OpportunityAssignmentHistory[]
+  pipelineId            String                         @map("pipeline_id") @db.Uuid
+  stageId               String                         @map("stage_id") @db.Uuid
+  leadId                String?                        @map("lead_id") @db.Uuid
+  status                DealStatus                     @default(OPEN)
+  amount                Decimal                        @default(0) @db.Decimal(19, 4)
+  currency              String                         @default("BRL") @db.VarChar(3)
+  closedAt              DateTime?                      @map("closed_at") @db.Timestamptz(6)
+  lostReason            String?                        @map("lost_reason") @db.VarChar(500)
+  pipeline              Pipeline                       @relation(fields: [organizationId, pipelineId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  stage                 PipelineStage                  @relation(fields: [organizationId, pipelineId, stageId, status], references: [organizationId, pipelineId, id, kind], onDelete: Restrict, onUpdate: Restrict)
+  lead                  Lead?                          @relation(fields: [organizationId, leadId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  stageHistory          OpportunityStageHistory[]
+
+  @@unique([organizationId, leadId])
+  @@unique([organizationId, id])
+  @@index([organizationId, pipelineId, stageId, createdAt, id])
+  @@index([organizationId, branchId, id])
+  @@index([organizationId, ownerMembershipId, id])
+  @@index([organizationId, createdAt, id])
+  @@index([organizationId, updatedAt, id])
+  @@index([organizationId, name, id])
+  @@map("opportunities")
+}
+
+model OpportunityStageHistory {
+  id                String                 @id @default(uuid()) @db.Uuid
+  organizationId    String                 @map("organization_id") @db.Uuid
+  opportunityId     String                 @map("opportunity_id") @db.Uuid
+  fromPipelineId    String?                @map("from_pipeline_id") @db.Uuid
+  toPipelineId      String                 @map("to_pipeline_id") @db.Uuid
+  fromStageId       String?                @map("from_stage_id") @db.Uuid
+  toStageId         String                 @map("to_stage_id") @db.Uuid
+  fromStageName     String?                @map("from_stage_name") @db.VarChar(160)
+  toStageName       String                 @map("to_stage_name") @db.VarChar(160)
+  fromStatus        DealStatus?            @map("from_status")
+  toStatus          DealStatus             @map("to_status")
+  reason            String?                @db.VarChar(500)
+  recordVersion     Int                    @map("record_version")
+  actorMembershipId String                 @map("actor_membership_id") @db.Uuid
+  occurredAt        DateTime               @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  opportunity       Opportunity            @relation(fields: [organizationId, opportunityId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  actor             OrganizationMembership @relation("StageHistoryActor", fields: [organizationId, actorMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  pipelineFrom      Pipeline?              @relation("HistoryPipelineFrom", map: "stage_history_from_pipeline_fk", fields: [organizationId, fromPipelineId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  pipelineTo        Pipeline               @relation("HistoryPipelineTo", map: "stage_history_to_pipeline_fk", fields: [organizationId, toPipelineId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  stageFrom         PipelineStage?         @relation("HistoryStageFrom", map: "stage_history_from_stage_fk", fields: [organizationId, fromPipelineId, fromStageId], references: [organizationId, pipelineId, id], onDelete: Restrict, onUpdate: Restrict)
+  stageTo           PipelineStage          @relation("HistoryStageTo", map: "stage_history_to_stage_fk", fields: [organizationId, toPipelineId, toStageId], references: [organizationId, pipelineId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, opportunityId, recordVersion])
+  @@map("opportunity_stage_history")
+}
+
+model LeadAssignmentHistory {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  organizationId        String                 @map("organization_id") @db.Uuid
+  leadId                String                 @map("lead_id") @db.Uuid
+  fromBranchId          String                 @map("from_branch_id") @db.Uuid
+  toBranchId            String                 @map("to_branch_id") @db.Uuid
+  fromOwnerMembershipId String                 @map("from_owner_membership_id") @db.Uuid
+  toOwnerMembershipId   String                 @map("to_owner_membership_id") @db.Uuid
+  actorMembershipId     String                 @map("actor_membership_id") @db.Uuid
+  recordVersion         Int                    @map("record_version")
+  occurredAt            DateTime               @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  lead                  Lead                   @relation(fields: [organizationId, leadId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  branchFrom            Branch                 @relation("LeadHistoryBranchFrom", fields: [organizationId, fromBranchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  branchTo              Branch                 @relation("LeadHistoryBranchTo", fields: [organizationId, toBranchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  ownerFrom             OrganizationMembership @relation("LeadHistoryOwnerFrom", fields: [organizationId, fromOwnerMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  ownerTo               OrganizationMembership @relation("LeadHistoryOwnerTo", fields: [organizationId, toOwnerMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  actor                 OrganizationMembership @relation("LeadHistoryActor", fields: [organizationId, actorMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, leadId, recordVersion])
+  @@map("lead_assignment_history")
+}
+
+model OpportunityAssignmentHistory {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  organizationId        String                 @map("organization_id") @db.Uuid
+  opportunityId         String                 @map("opportunity_id") @db.Uuid
+  fromBranchId          String                 @map("from_branch_id") @db.Uuid
+  toBranchId            String                 @map("to_branch_id") @db.Uuid
+  fromOwnerMembershipId String                 @map("from_owner_membership_id") @db.Uuid
+  toOwnerMembershipId   String                 @map("to_owner_membership_id") @db.Uuid
+  actorMembershipId     String                 @map("actor_membership_id") @db.Uuid
+  recordVersion         Int                    @map("record_version")
+  occurredAt            DateTime               @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  opportunity           Opportunity            @relation(fields: [organizationId, opportunityId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  branchFrom            Branch                 @relation("OpportunityHistoryBranchFrom", fields: [organizationId, fromBranchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  branchTo              Branch                 @relation("OpportunityHistoryBranchTo", fields: [organizationId, toBranchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  ownerFrom             OrganizationMembership @relation("OpportunityHistoryOwnerFrom", fields: [organizationId, fromOwnerMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  ownerTo               OrganizationMembership @relation("OpportunityHistoryOwnerTo", fields: [organizationId, toOwnerMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  actor                 OrganizationMembership @relation("OpportunityHistoryActor", fields: [organizationId, actorMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, opportunityId, recordVersion])
+  @@map("opportunity_assignment_history")
 }

@@ -1,10 +1,12 @@
 import type { Metadata } from 'next';
-import { ModulePlaceholder } from '@/components/layout/module-placeholder';
+import { Suspense } from 'react';
+import { LeadList } from '@/features/sales/lead-list';
+import { ListSkeleton } from '@/features/commercial/query-feedback';
 export const metadata: Metadata = { title: 'Leads' };
 export default function Page() {
   return (
-    <>
-      <ModulePlaceholder href="/leads" />
-    </>
+    <Suspense fallback={<ListSkeleton />}>
+      <LeadList />
+    </Suspense>
   );
 }

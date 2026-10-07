@@ -1,10 +1,12 @@
 import type { Metadata } from 'next';
-import { ModulePlaceholder } from '@/components/layout/module-placeholder';
-export const metadata: Metadata = { title: 'CRM' };
+import { Suspense } from 'react';
+import { OpportunityList } from '@/features/sales/opportunity-list';
+import { ListSkeleton } from '@/features/commercial/query-feedback';
+export const metadata: Metadata = { title: 'Oportunidades' };
 export default function Page() {
   return (
-    <>
-      <ModulePlaceholder href="/crm" />
-    </>
+    <Suspense fallback={<ListSkeleton />}>
+      <OpportunityList />
+    </Suspense>
   );
 }

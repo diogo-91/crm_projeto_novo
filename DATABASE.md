@@ -2,7 +2,7 @@
 
 ## 1. Estado e decisões
 
-O ERD abaixo é um modelo **conceitual futuro**, não uma ordem para gerar schema/migrations comerciais. A fase 1 criou InfrastructureMetadata. A fase 2 materializa exclusivamente Organization, Branch, User global, OrganizationMembership e MembershipBranch; consulte a seção de modelo físico atual, README e ADR-011. A fase 3 acrescenta credenciais, sessões e RBAC conforme a seção física ao final e ADR-012. A fase 5 acrescenta Contact, Company, Tag, ContactTag e históricos mínimos de atribuição, conforme ADR-014 e a seção física abaixo. O restante do ERD continua futuro. Campos e cardinalidades serão refinados por módulo; os limites de tenant e invariantes já são decisões obrigatórias. PostgreSQL com Prisma, schema compartilhado e `organization_id` em entidades tenant. Identidade `User` é global; empresa cliente `Company` é diferente de `Organization`.
+O ERD abaixo é um modelo **conceitual futuro**, não uma ordem para gerar schema/migrations comerciais. A fase 1 criou InfrastructureMetadata. A fase 2 materializa exclusivamente Organization, Branch, User global, OrganizationMembership e MembershipBranch; consulte a seção de modelo físico atual, README e ADR-011. A fase 3 acrescenta credenciais, sessões e RBAC conforme a seção física ao final e ADR-012. A fase 5 acrescenta Contact, Company, Tag, ContactTag e históricos mínimos de atribuição, conforme ADR-014 e a seção física abaixo. A fase 6 acrescenta leads, pipelines/etapas, oportunidades e históricos mínimos, conforme ADR-015 e a seção física ao final. O restante do ERD continua futuro. Campos e cardinalidades serão refinados por módulo; os limites de tenant e invariantes já são decisões obrigatórias. PostgreSQL com Prisma, schema compartilhado e `organization_id` em entidades tenant. Identidade `User` é global; empresa cliente `Company` é diferente de `Organization`.
 
 UUID gerado pela aplicação/Prisma ou default PostgreSQL compatível com a versão escolhida. Começar com UUID v4; avaliar v7 apenas com suporte real e medição, sem substituir UUID por sequências públicas. Datas `timestamptz` em UTC; frontend converte para fuso da organização/usuário. Horários de automações/metas precisam armazenar também o fuso IANA usado na definição do período para lidar com mudanças de horário.
 
@@ -773,3 +773,44 @@ API seleciona só colunas necessárias, busca limit+1 e pagina depois de filtrar
 ### Seed e evolução
 
 Seed principal mantém demo estrutural, senha existente e grants idempotentes, amplia catálogo para 20 permissões (oito estruturais e doze comerciais) e atualiza seis templates **na demo**. Não cria clientes, empresas ou tags fictícios e não concede permissões a todos os tenants existentes. Templates de organizações novas incluem o catálogo comercial. Fixtures sintéticas de CRUD/volume são exclusivas dos bancos isolados de integração/E2E. Nenhuma nova variável de ambiente ou serviço foi necessária.
+
+## Modelo físico incremental — fase 6
+
+A migration `20261007150000_create_leads_pipelines_opportunities` acrescenta sete tabelas, LeadStatus/DealStatus e CHECKs; preserva as seis migrations anteriores. Veja ADR-015 para decisões e RBAC. Nenhuma migration concede roles/permissões. Seed demo continua sem cadastros comerciais fictícios; atualiza seu catálogo/templates de forma idempotente.
+
+```mermaid
+erDiagram
+  Organization ||--o{ Lead : possui
+  Organization ||--o{ Pipeline : configura
+  Organization ||--o{ Opportunity : possui
+  Branch ||--o{ Lead : carteira
+  Branch ||--o{ Opportunity : carteira
+  Branch o|--o{ Pipeline : restringe_opcionalmente
+  MembershipBranch ||--o{ Lead : responsavel_na_filial
+  MembershipBranch ||--o{ Opportunity : responsavel_na_filial
+  Pipeline ||--|{ PipelineStage : ordena
+  Pipeline ||--o{ Opportunity : organiza
+  PipelineStage ||--o{ Opportunity : etapa_e_resultado
+  Lead o|--o| Opportunity : conversao_unica
+  Contact o|--o{ Lead : associado
+  Company o|--o{ Lead : associada
+  Contact o|--o{ Opportunity : associado
+  Company o|--o{ Opportunity : associada
+  Opportunity ||--|{ OpportunityStageHistory : historico_atomico
+  PipelineStage o|--o{ OpportunityStageHistory : origem
+  PipelineStage ||--o{ OpportunityStageHistory : destino
+  Lead ||--o{ LeadAssignmentHistory : transferencias
+  Opportunity ||--o{ OpportunityAssignmentHistory : transferencias
+  OrganizationMembership ||--o{ OpportunityStageHistory : ator
+```
+
+- Lead/Opportunity: UUID, tenant, filial, owner membership, autores tenant, timestamps/version/active. FK `(organization_id, owner_membership_id, branch_id)` → MembershipBranch; demais referências de tenant são compostas. Lead não inclui hash/IDs internos nas respostas.
+- Lead: NEW/QUALIFIED/DISQUALIFIED/CONVERTED; conversão consistente com convertedAt+hash SHA-256. E-mail/telefone normalizados; telefone não único. Opportunity tem unique `(organization_id, lead_id)`; valores null permitem oportunidades sem lead.
+- Pipeline: unique tenant+normalizedName; filial opcional por FK tenant+branch. PipelineStage: unique tenant+pipeline+name e tenant+pipeline+id; kind imutável no caso de uso; posição não negativa. Ordenação/rebalance sob lock do parent e Pipeline.version. Até 30 etapas no caso de uso, uma OPEN ativa obrigatória.
+- Opportunity: FK `(organization_id,pipeline_id,stage_id,status)` → PipelineStage `(organization_id,pipeline_id,id,kind)`, impedindo etapa de outro pipeline ou outcome divergente. Decimal(19,4) não negativo, string no transporte, CHECK de moeda BRL/USD/EUR/GBP e estado/closedAt/lostReason. Não há câmbio/aritmética financeira float.
+- StageHistory: FKs tenant+pipeline+stage para origem/destino, autoria membership, snapshots de nomes/status e unique tenant+opportunity+recordVersion. Origem completamente nula somente na versão inicial. Perda exige motivo; retorno OPEN limpa motivo e fechamento na oportunidade. GET ordena recordVersion, usando cursor opaco de identidade do item anterior.
+- Históricos de atribuição: mesmas FKs tenant de Contact/Company; versão >1. Não implementam AuditLog geral nem eventos sem consumidor.
+- Índices tenant+branch/id, tenant+owner/id, tenant+createdAt/id, tenant+updatedAt/id e tenant+name/id para listas de leads/oportunidades. Kanban usa tenant+pipeline+stage+createdAt/id; etapas usam tenant+pipeline+position/id; histórias usam unique tenant+recurso+version. Sem índices especulativos em todos os campos.
+- Regra condicional de pipeline específico de filial é aplicada pelo proprietário do módulo, sob lock compartilhado do pipeline; FKs tenant fornecem proteção adicional de organização. Alterar o pipeline de uma oportunidade não é permitido pelo PATCH.
+
+Banco limpo e upgrade devem receber todas as sete migrations via migrate deploy; seed repetido preserva credenciais/IDs/dados. Não usar db push, modificar migrations aplicadas ou ampliar grants tenant por SQL de migration.

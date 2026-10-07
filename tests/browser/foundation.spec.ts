@@ -47,7 +47,9 @@ test('navigates every module and persists sidebar preference through real refres
       .getByRole('link', { name: label, exact: true })
       .click();
     await expect(page).toHaveURL(new RegExp(`/${path}$`));
-    await expect(page.getByRole('heading', { name: label, exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: label === 'CRM' ? 'Oportunidades' : label, exact: true }),
+    ).toBeVisible();
   }
   await page.getByRole('button', { name: 'Recolher navegação' }).click();
   await expect(page.getByRole('button', { name: 'Expandir navegação' })).toBeVisible();

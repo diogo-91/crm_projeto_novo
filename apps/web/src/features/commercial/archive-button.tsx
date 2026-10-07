@@ -23,7 +23,16 @@ export function ArchiveButton({
 }) {
   const [open, setOpen] = useState(false);
   const mutation = useArchive(resource);
-  const label = resource === 'contacts' ? 'cliente' : resource === 'companies' ? 'empresa' : 'tag';
+  const label =
+    resource === 'contacts'
+      ? 'cliente'
+      : resource === 'companies'
+        ? 'empresa'
+        : resource === 'leads'
+          ? 'lead'
+          : resource === 'opportunities'
+            ? 'oportunidade'
+            : 'tag';
   return (
     <>
       <Button variant="outline" onClick={() => setOpen(true)}>

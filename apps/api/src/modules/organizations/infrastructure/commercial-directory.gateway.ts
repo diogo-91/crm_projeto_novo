@@ -7,6 +7,13 @@ import { identityPage } from '../../../common/commercial-pagination.js';
 @Injectable()
 export class CommercialDirectoryGateway {
   constructor(@Inject(UserIdentityGateway) private readonly identities: UserIdentityGateway) {}
+  async requireBranch(tx: DatabaseTransaction, organizationId: string, branchId: string) {
+    const branch = await tx.branch.findFirst({
+      where: { organizationId, id: branchId, active: true },
+      select: { id: true },
+    });
+    if (!branch) throw new ApplicationError('RESOURCE_NOT_FOUND', 'Active branch unavailable.');
+  }
   async assignment(
     tx: DatabaseTransaction,
     organizationId: string,

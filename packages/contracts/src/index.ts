@@ -30,3 +30,5 @@ export * from './auth.js';
 export * from './access-control.js';
 
 export * from './commercial.js';
+
+export * from './sales.js';

@@ -8,6 +8,8 @@ import {
   assignmentListResponseSchema,
   tagListResponseSchema,
   tagResponseSchema,
+  leadResponseSchema,
+  opportunityResponseSchema,
 } from '@crm/contracts';
 import type {
   CreateContact,
@@ -18,7 +20,7 @@ import type {
   UpdateTag,
 } from '@crm/contracts';
 import { useAuth } from '@/features/auth/auth-provider';
-export type CommercialResource = 'contacts' | 'companies';
+export type CommercialResource = 'contacts' | 'companies' | 'leads' | 'opportunities';
 export type Filters = Record<string, string>;
 export function queryString(filters: Filters) {
   return new URLSearchParams(
@@ -232,7 +234,11 @@ export function useArchive(resource: CommercialResource | 'tags') {
           ? contactResponseSchema
           : resource === 'companies'
             ? companyResponseSchema
-            : tagResponseSchema,
+            : resource === 'leads'
+              ? leadResponseSchema
+              : resource === 'opportunities'
+                ? opportunityResponseSchema
+                : tagResponseSchema,
         { method: 'DELETE', body: JSON.stringify({ expectedVersion: version }) },
       ),
     onSuccess: async () => {
