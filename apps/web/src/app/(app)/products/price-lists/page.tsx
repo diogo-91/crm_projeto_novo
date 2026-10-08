@@ -1,12 +1,10 @@
-import type { Metadata } from 'next';
 import { Suspense } from 'react';
-import { ProductList } from '@/features/catalog/product-list';
+import { PriceListList } from '@/features/catalog/price-list-list';
 import { ListSkeleton } from '@/features/commercial/query-feedback';
-export const metadata: Metadata = { title: 'Produtos' };
 export default function Page() {
   return (
     <Suspense fallback={<ListSkeleton />}>
-      <ProductList />
+      <PriceListList />
     </Suspense>
   );
 }

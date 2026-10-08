@@ -7,6 +7,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { AuthenticationGuard, AuthorizationGuard } from './common/security.guards.js';
 import { AuthModule } from './modules/auth/index.js';
 import { AccessControlModule } from './modules/access-control/index.js';
+import { CatalogModule } from './modules/catalog/index.js';
 import { Module } from '@nestjs/common';
 import { RuntimeConfigModule, LoggingModule, QueueModule } from './modules/runtime/index.js';
 import { HealthModule } from './modules/health/health.module.js';
@@ -20,6 +21,7 @@ import { OrganizationsModule } from './modules/organizations/organizations.modul
     OrganizationsModule,
     AuthModule,
     AccessControlModule,
+    CatalogModule,
     ContactsModule,
     LeadsModule,
     TasksModule,

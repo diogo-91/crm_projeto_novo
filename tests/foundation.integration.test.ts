@@ -14,6 +14,12 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createDatabaseClient } from '@crm/database';
 import type { DatabaseClient } from '@crm/database';
 import {
+  productResponseSchema,
+  productListResponseSchema,
+  priceListResponseSchema,
+  priceListListResponseSchema,
+  priceItemListResponseSchema,
+  priceBranchOptionsSchema,
   taskResponseSchema,
   taskListResponseSchema,
   activityResponseSchema,
@@ -717,7 +723,7 @@ it('Swagger documents implemented organizational contracts with bearer security 
   );
 });
 
-it('database migration history on an empty PostgreSQL contains all eight successful immutable migrations', async () => {
+it('database migration history on an empty PostgreSQL contains all nine successful immutable migrations', async () => {
   const migrations = await db().$queryRaw<
     { migration_name: string; finished_at: Date | null; rolled_back_at: Date | null }[]
   >`SELECT migration_name, finished_at, rolled_back_at FROM "_prisma_migrations" ORDER BY migration_name`;
@@ -730,6 +736,7 @@ it('database migration history on an empty PostgreSQL contains all eight success
     '20261007123000_create_assignment_history',
     '20261007150000_create_leads_pipelines_opportunities',
     '20261007200000_create_tasks_activities_reminders',
+    '20261008140000_create_products_price_lists',
   ]);
   expect(migrations.every((row) => row.finished_at !== null && row.rolled_back_at === null)).toBe(
     true,
@@ -3584,4 +3591,635 @@ it('task histories, commands, timelines and notifications never resolve foreign-
   expect(
     (await db().notification.findUniqueOrThrow({ where: { id: notice.id } })).readAt,
   ).toBeNull();
+});
+
+async function productFixture(
+  f: Awaited<ReturnType<typeof commercialFixture>>,
+  overrides: Record<string, unknown> = {},
+) {
+  const result = await authenticated('/products', f.token, {
+    name: 'Synthetic product',
+    sku: 'SKU-' + randomUUID(),
+    unit: 'UN',
+    ...overrides,
+  });
+  expect(result.status).toBe(201);
+  return productResponseSchema.parse(await result.json());
+}
+async function priceListFixture(
+  f: Awaited<ReturnType<typeof commercialFixture>>,
+  branchId: string | null = null,
+) {
+  const result = await authenticated('/price-lists', f.token, {
+    name: 'Synthetic list ' + randomUUID(),
+    currency: 'BRL',
+    branchId,
+  });
+  expect(result.status).toBe(201);
+  return priceListResponseSchema.parse(await result.json());
+}
+it('catalog creates explicit DTOs, normalized SKU and exact six-place prices', async () => {
+  const f = await commercialFixture();
+  const product = await productFixture(f, { sku: ' normalized ' });
+  const list = await priceListFixture(f);
+  expect(product.sku).toBe('NORMALIZED');
+  expect(product).not.toHaveProperty('organizationId');
+  expect(product).not.toHaveProperty('updatedByMembershipId');
+  expect(list.canManage).toBe(true);
+  const saved = await authenticated(
+    `/price-lists/${list.id}/items/${product.id}`,
+    f.token,
+    { unitPrice: '999999999999.999999', expectedVersion: list.version },
+    'PUT',
+  );
+  expect(saved.status).toBe(200);
+  expect(priceListResponseSchema.parse(await saved.json()).version).toBe(2);
+  const prices = priceItemListResponseSchema.parse(
+    await (await authenticated(`/price-lists/${list.id}/items`, f.token)).json(),
+  );
+  expect(prices.data[0]?.unitPrice).toBe('999999999999.999999');
+  expect(prices.data[0]?.product.sku).toBe('NORMALIZED');
+});
+it('catalog rejects unsafe mass assignment, invalid decimals and mutable list context', async () => {
+  const f = await commercialFixture();
+  const product = await productFixture(f);
+  const list = await priceListFixture(f);
+  expect(
+    (
+      await authenticated(
+        `/products/${product.id}`,
+        f.token,
+        { unit: 'BOX', expectedVersion: 1 },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(400);
+  for (const input of [
+    { name: '', sku: 'VALID', unit: 'UN' },
+    { name: 'P', sku: 'A B', unit: 'UN' },
+    { name: 'P', sku: 'VALID', unit: 'UN', organizationId: f.org.id },
+  ])
+    expect((await authenticated('/products', f.token, input)).status).toBe(400);
+  for (const unitPrice of ['-1', '1.0000001', '1000000000000', '1e3', 1.1])
+    expect(
+      (
+        await authenticated(
+          `/price-lists/${list.id}/items/${product.id}`,
+          f.token,
+          { unitPrice, expectedVersion: 1 },
+          'PUT',
+        )
+      ).status,
+    ).toBe(400);
+  expect(
+    (
+      await authenticated(
+        `/price-lists/${list.id}`,
+        f.token,
+        { currency: 'USD', expectedVersion: 1 },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(400);
+  expect(
+    (
+      await authenticated(
+        `/price-lists/${list.id}`,
+        f.token,
+        { branchId: f.a.id, expectedVersion: 1 },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(400);
+  expect((await authenticated('/products/not-a-uuid', f.token)).status).toBe(400);
+});
+it('catalog uniques decide concurrent normalized SKU and list-name creation', async () => {
+  const f = await commercialFixture();
+  await assign(f.org.id, f.owner.id, 'ADMIN', 'ORGANIZATION');
+  const peerToken = (await login(f.owner.user.email)).body.accessToken;
+  const sku = 'RACE-' + randomUUID();
+  const products = await Promise.all([
+    authenticated('/products', f.token, { name: 'A', sku, unit: 'UN' }),
+    authenticated('/products', peerToken, { name: 'B', sku: sku.toLowerCase(), unit: 'UN' }),
+  ]);
+  expect(products.map((row) => row.status).sort()).toEqual([201, 409]);
+  const name = 'Race ' + randomUUID();
+  const lists = await Promise.all([
+    authenticated('/price-lists', f.token, { name, currency: 'USD' }),
+    authenticated('/price-lists', peerToken, { name: name.toLowerCase(), currency: 'USD' }),
+  ]);
+  expect(lists.map((row) => row.status).sort()).toEqual([201, 409]);
+  const conflict = products.find((row) => row.status === 409);
+  expect(conflict).toBeDefined();
+  if (!conflict) throw new Error('Expected conflict');
+  const problem: unknown = await conflict.json();
+  expect(problem).toHaveProperty('code', 'RESOURCE_CONFLICT');
+  expect(JSON.stringify(problem)).not.toContain('Prisma');
+});
+it('catalog concurrent edits and price changes enforce one aggregate version', async () => {
+  const f = await commercialFixture();
+  await assign(f.org.id, f.owner.id, 'ADMIN', 'ORGANIZATION');
+  const peerToken = (await login(f.owner.user.email)).body.accessToken;
+  const product = await productFixture(f);
+  const list = await priceListFixture(f);
+  const changed = await Promise.all([
+    authenticated(`/products/${product.id}`, f.token, { name: 'A', expectedVersion: 1 }, 'PATCH'),
+    authenticated(`/products/${product.id}`, peerToken, { name: 'B', expectedVersion: 1 }, 'PATCH'),
+  ]);
+  expect(changed.map((row) => row.status).sort()).toEqual([200, 409]);
+  const priced = await Promise.all(
+    ['1.000001', '2.000002'].map((unitPrice, index) =>
+      authenticated(
+        `/price-lists/${list.id}/items/${product.id}`,
+        index === 0 ? f.token : peerToken,
+        { unitPrice, expectedVersion: 1 },
+        'PUT',
+      ),
+    ),
+  );
+  expect(priced.map((row) => row.status).sort()).toEqual([200, 409]);
+  expect(
+    await db().priceListItem.count({ where: { priceListId: list.id, productId: product.id } }),
+  ).toBe(1);
+});
+it('catalog archives without deleting prices, reserves SKU and prohibits edits to archived resources', async () => {
+  const f = await commercialFixture();
+  const product = await productFixture(f);
+  const list = await priceListFixture(f);
+  expect(
+    (
+      await authenticated(
+        `/price-lists/${list.id}/items/${product.id}`,
+        f.token,
+        { unitPrice: '0.000001', expectedVersion: 1 },
+        'PUT',
+      )
+    ).status,
+  ).toBe(200);
+  expect(
+    (await authenticated(`/products/${product.id}`, f.token, { expectedVersion: 1 }, 'DELETE'))
+      .status,
+  ).toBe(200);
+  expect(
+    (
+      await authenticated(
+        `/products/${product.id}`,
+        f.token,
+        { name: 'Denied', expectedVersion: 2 },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(409);
+  expect(
+    (await authenticated('/products', f.token, { name: 'Duplicate', sku: product.sku, unit: 'UN' }))
+      .status,
+  ).toBe(409);
+  expect(
+    (
+      await authenticated(
+        `/price-lists/${list.id}/items/${product.id}`,
+        f.token,
+        { unitPrice: '1', expectedVersion: 2 },
+        'PUT',
+      )
+    ).status,
+  ).toBe(404);
+  const prices = priceItemListResponseSchema.parse(
+    await (await authenticated(`/price-lists/${list.id}/items`, f.token)).json(),
+  );
+  expect(prices.data[0]?.product.active).toBe(false);
+  expect(prices.data[0]?.unitPrice).toBe('0.000001');
+  expect(
+    (await authenticated(`/price-lists/${list.id}`, f.token, { expectedVersion: 2 }, 'DELETE'))
+      .status,
+  ).toBe(200);
+  expect(
+    (
+      await authenticated(
+        `/price-lists/${list.id}`,
+        f.token,
+        { name: 'Denied', expectedVersion: 3 },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(409);
+  expect(await db().priceListItem.count({ where: { priceListId: list.id } })).toBe(1);
+});
+it('price items can be explicitly archived and reactivated without duplicate records', async () => {
+  const f = await commercialFixture();
+  const product = await productFixture(f);
+  const list = await priceListFixture(f);
+  expect(
+    (
+      await authenticated(
+        `/price-lists/${list.id}/items/${product.id}`,
+        f.token,
+        { unitPrice: '12.123456', expectedVersion: 1 },
+        'PUT',
+      )
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await authenticated(
+        `/price-lists/${list.id}/items/${product.id}`,
+        f.token,
+        { expectedVersion: 2 },
+        'DELETE',
+      )
+    ).status,
+  ).toBe(200);
+  const archived = priceItemListResponseSchema.parse(
+    await (await authenticated(`/price-lists/${list.id}/items?active=false`, f.token)).json(),
+  );
+  expect(archived.data).toHaveLength(1);
+  expect(
+    (
+      await authenticated(
+        `/price-lists/${list.id}/items/${product.id}`,
+        f.token,
+        { unitPrice: '13', expectedVersion: 3 },
+        'PUT',
+      )
+    ).status,
+  ).toBe(200);
+  const active = priceItemListResponseSchema.parse(
+    await (await authenticated(`/price-lists/${list.id}/items?active=true`, f.token)).json(),
+  );
+  expect(active.data[0]?.id).toBe(archived.data[0]?.id);
+  expect(active.data[0]?.unitPrice).toBe('13.000000');
+});
+it('catalog enforces real PostgreSQL cross-tenant list, product, branch and author FKs', async () => {
+  const a = await commercialFixture();
+  const b = await commercialFixture();
+  const pa = await productFixture(a);
+  const pb = await productFixture(b);
+  const la = await priceListFixture(a);
+  const lb = await priceListFixture(b);
+  for (const data of [
+    {
+      organizationId: a.org.id,
+      priceListId: la.id,
+      productId: pb.id,
+      updatedByMembershipId: a.owner.id,
+    },
+    {
+      organizationId: a.org.id,
+      priceListId: lb.id,
+      productId: pa.id,
+      updatedByMembershipId: a.owner.id,
+    },
+    {
+      organizationId: a.org.id,
+      priceListId: la.id,
+      productId: pa.id,
+      updatedByMembershipId: b.owner.id,
+    },
+  ])
+    await expect(
+      db().priceListItem.create({ data: { ...data, unitPrice: '1' } }),
+    ).rejects.toMatchObject({ code: 'P2003' });
+  await expect(
+    db().priceList.update({ where: { id: la.id }, data: { branchId: b.a.id } }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+  await expect(
+    db().product.update({ where: { id: pa.id }, data: { updatedByMembershipId: b.owner.id } }),
+  ).rejects.toMatchObject({ code: 'P2003' });
+});
+it('catalog database rejects malformed SKU, negative price and duplicate product-list keys', async () => {
+  const f = await commercialFixture();
+  const product = await productFixture(f);
+  const list = await priceListFixture(f);
+  await expect(
+    db().product.update({ where: { id: product.id }, data: { sku: 'lower case' } }),
+  ).rejects.toThrow();
+  await expect(
+    db().priceList.update({ where: { id: list.id }, data: { currency: 'JPY' } }),
+  ).rejects.toThrow();
+  const data = {
+    organizationId: f.org.id,
+    priceListId: list.id,
+    productId: product.id,
+    unitPrice: '1',
+    updatedByMembershipId: f.owner.id,
+  };
+  await expect(
+    db().priceListItem.create({ data: { ...data, unitPrice: '-0.1' } }),
+  ).rejects.toThrow();
+  await db().priceListItem.create({ data });
+  await expect(db().priceListItem.create({ data })).rejects.toMatchObject({ code: 'P2002' });
+});
+it('catalog tenant queries and writes never reveal or attach objects from another organization', async () => {
+  const a = await commercialFixture();
+  const b = await commercialFixture();
+  const pa = await productFixture(a, { sku: 'SHARED' });
+  const pb = await productFixture(b, { sku: 'SHARED' });
+  const la = await priceListFixture(a);
+  const lb = await priceListFixture(b);
+  const products = productListResponseSchema.parse(
+    await (await authenticated('/products', a.token)).json(),
+  );
+  expect(products.data.map((row) => row.id)).toEqual([pa.id]);
+  for (const path of [`/products/${pb.id}`, `/price-lists/${lb.id}`, `/price-lists/${lb.id}/items`])
+    expect((await authenticated(path, a.token)).status).toBe(404);
+  expect(
+    (
+      await authenticated(
+        `/products/${pb.id}`,
+        a.token,
+        { name: 'Denied', expectedVersion: 1 },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(404);
+  expect(
+    (
+      await authenticated(
+        `/price-lists/${la.id}/items/${pb.id}`,
+        a.token,
+        { unitPrice: '1', expectedVersion: 1 },
+        'PUT',
+      )
+    ).status,
+  ).toBe(404);
+  expect(
+    (
+      await authenticated('/price-lists', a.token, {
+        name: 'Denied',
+        currency: 'BRL',
+        branchId: b.a.id,
+      })
+    ).status,
+  ).toBe(404);
+});
+it.each(['OWN', 'BRANCH', 'BRANCH_SET', 'ORGANIZATION'] as const)(
+  'price-list %s reads and writes obey membership scope before pagination',
+  async (scope) => {
+    const f = await commercialFixture();
+    const shared = await priceListFixture(f);
+    const a = await priceListFixture(f, f.a.id);
+    const b = await priceListFixture(f, f.b.id);
+    const c = await priceListFixture(f, f.c.id);
+    await assign(
+      f.org.id,
+      f.owner.id,
+      'SALES_MANAGER',
+      scope,
+      scope === 'BRANCH' ? [f.a.id] : scope === 'BRANCH_SET' ? [f.a.id, f.b.id] : [],
+    );
+    const token = (await login(f.owner.user.email)).body.accessToken;
+    const expected =
+      scope === 'ORGANIZATION' || scope === 'OWN'
+        ? [shared.id, a.id, b.id, c.id]
+        : scope === 'BRANCH'
+          ? [shared.id, a.id]
+          : [shared.id, a.id, b.id];
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = priceListListResponseSchema.parse(
+        await (
+          await authenticated('/price-lists?limit=1' + (cursor ? '&cursor=' + cursor : ''), token)
+        ).json(),
+      );
+      seen.push(...page.data.map((row) => row.id));
+      cursor = page.pageInfo.nextCursor;
+    } while (cursor);
+    expect(seen.sort()).toEqual(expected.sort());
+    for (const list of [shared, a, b, c]) {
+      const allowed =
+        scope === 'ORGANIZATION' ||
+        (scope === 'BRANCH' && list.id === a.id) ||
+        (scope === 'BRANCH_SET' && [a.id, b.id].includes(list.id));
+      expect(
+        (
+          await authenticated(
+            `/price-lists/${list.id}`,
+            token,
+            { name: 'Changed ' + list.id, expectedVersion: 1 },
+            'PATCH',
+          )
+        ).status,
+      ).toBe(allowed ? 200 : 403);
+    }
+    const options = priceBranchOptionsSchema.parse(
+      await (await authenticated('/price-lists/available-branches', token)).json(),
+    );
+    expect(options.organizationAllowed).toBe(scope === 'ORGANIZATION');
+    expect(options.data.map((row) => row.id).sort()).toEqual(
+      (scope === 'ORGANIZATION'
+        ? [f.a.id, f.b.id, f.c.id]
+        : scope === 'BRANCH'
+          ? [f.a.id]
+          : scope === 'BRANCH_SET'
+            ? [f.a.id, f.b.id]
+            : []
+      ).sort(),
+    );
+    expect(
+      (await authenticated('/products', token, { name: 'Denied', sku: 'DENIED', unit: 'UN' }))
+        .status,
+    ).toBe(403);
+  },
+);
+it('price-list scope cannot borrow an unrelated organizational grant or survive a revoked branch grant', async () => {
+  const f = await commercialFixture();
+  const shared = await priceListFixture(f);
+  const list = await priceListFixture(f, f.a.id);
+  const grantId = await assign(f.org.id, f.owner.id, 'SALES_MANAGER', 'BRANCH', [f.a.id]);
+  await assign(f.org.id, f.owner.id, 'VIEWER', 'ORGANIZATION');
+  const token = (await login(f.owner.user.email)).body.accessToken;
+  const visible = priceListResponseSchema.parse(
+    await (await authenticated(`/price-lists/${shared.id}`, token)).json(),
+  );
+  expect(visible.canManage).toBe(false);
+  expect(
+    (
+      await authenticated(
+        `/price-lists/${shared.id}`,
+        token,
+        { name: 'Denied', expectedVersion: 1 },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(403);
+  await db().userRole.delete({ where: { id: grantId } });
+  expect(
+    (
+      await authenticated(
+        `/price-lists/${list.id}`,
+        token,
+        { name: 'Denied', expectedVersion: 1 },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(403);
+});
+it('product pagination is bounded, searchable and validates cursor ordering', async () => {
+  const f = await commercialFixture();
+  for (const name of ['Alpha', 'Beta', 'Gamma']) await productFixture(f, { name });
+  const first = productListResponseSchema.parse(
+    await (await authenticated('/products?sort=name&direction=asc&limit=1', f.token)).json(),
+  );
+  expect(first.data[0]?.name).toBe('Alpha');
+  expect(first.pageInfo.hasNextPage).toBe(true);
+  const second = productListResponseSchema.parse(
+    await (
+      await authenticated(
+        '/products?sort=name&direction=asc&limit=1&cursor=' + first.pageInfo.nextCursor,
+        f.token,
+      )
+    ).json(),
+  );
+  expect(second.data[0]?.name).toBe('Beta');
+  expect(
+    (await authenticated('/products?sort=updatedAt&cursor=' + first.pageInfo.nextCursor, f.token))
+      .status,
+  ).toBe(400);
+  const searched = productListResponseSchema.parse(
+    await (await authenticated('/products?search=gamma', f.token)).json(),
+  );
+  expect(searched.data.map((row) => row.name)).toEqual(['Gamma']);
+  expect((await authenticated('/products?limit=101', f.token)).status).toBe(400);
+});
+it('catalog authorization is independent of contacts and denied without product read on price items', async () => {
+  const f = await commercialFixture();
+  const list = await priceListFixture(f);
+  const role = await db().role.create({
+    data: {
+      organizationId: f.org.id,
+      code: 'PRICE_ONLY',
+      name: 'Price only',
+      description: 'Fixture',
+    },
+  });
+  const permission = await db().permission.findUniqueOrThrow({
+    where: { code: 'price-lists.read' },
+  });
+  await db().rolePermission.create({
+    data: { organizationId: f.org.id, roleId: role.id, permissionId: permission.id },
+  });
+  await db().userRole.create({
+    data: {
+      organizationId: f.org.id,
+      membershipId: f.owner.id,
+      roleId: role.id,
+      scope: 'ORGANIZATION',
+    },
+  });
+  const token = (await login(f.owner.user.email)).body.accessToken;
+  expect((await authenticated(`/price-lists/${list.id}`, token)).status).toBe(200);
+  expect((await authenticated(`/price-lists/${list.id}/items`, token)).status).toBe(403);
+  expect((await authenticated('/products', token)).status).toBe(403);
+});
+it('catalog seed is idempotent, adds four permissions and no fabricated prices or products', async () => {
+  const before = {
+    products: await db().product.count(),
+    lists: await db().priceList.count(),
+    prices: await db().priceListItem.count(),
+    permissions: await db().permission.count(),
+    roles: await db().role.count(),
+  };
+  for (let i = 0; i < 2; i++)
+    await execute(process.execPath, ['apps/api/dist/bootstrap/seed.js'], { env: environment });
+  expect({
+    products: await db().product.count(),
+    lists: await db().priceList.count(),
+    prices: await db().priceListItem.count(),
+    permissions: await db().permission.count(),
+    roles: await db().role.count(),
+  }).toEqual(before);
+  expect(
+    await db().permission.count({
+      where: {
+        code: {
+          in: ['products.read', 'products.manage', 'price-lists.read', 'price-lists.manage'],
+        },
+      },
+    }),
+  ).toBe(4);
+});
+it('OpenAPI describes only implemented catalog endpoints and no sensitive catalog payload appears in logs', async () => {
+  const f = await commercialFixture();
+  await productFixture(f, {
+    name: 'Private synthetic catalogue name',
+    description: 'Private synthetic description',
+  });
+  const document: unknown = await (await fetch(url + '/docs/openapi.json')).json();
+  for (const key of [
+    'paths./api/v1/products.post.requestBody',
+    'paths./api/v1/price-lists.get',
+    'paths./api/v1/price-lists/{id}/items/{productId}.put.requestBody',
+    'paths./api/v1/price-lists/available-branches.get',
+  ])
+    expect(document).toHaveProperty(key);
+  const logs = children.flatMap((child) => child.logs).join('');
+  expect(logs).not.toContain('Private synthetic catalogue name');
+  expect(logs).not.toContain('Private synthetic description');
+});
+
+it('product archival racing price writes from different actors serializes without a price on an already archived product', async () => {
+  const f = await commercialFixture();
+  const product = await productFixture(f);
+  const list = await priceListFixture(f);
+  await assign(f.org.id, f.owner.id, 'ADMIN', 'ORGANIZATION');
+  const token = (await login(f.owner.user.email)).body.accessToken;
+  const [archived, priced] = await Promise.all([
+    authenticated(`/products/${product.id}`, token, { expectedVersion: 1 }, 'DELETE'),
+    authenticated(
+      `/price-lists/${list.id}/items/${product.id}`,
+      f.token,
+      { unitPrice: '99.999999', expectedVersion: 1 },
+      'PUT',
+    ),
+  ]);
+  expect(archived.status).toBe(200);
+  expect([200, 404]).toContain(priced.status);
+  expect(await db().priceListItem.count({ where: { priceListId: list.id } })).toBe(
+    priced.status === 200 ? 1 : 0,
+  );
+  expect(
+    (
+      await authenticated(
+        `/price-lists/${list.id}/items/${product.id}`,
+        f.token,
+        { unitPrice: '100', expectedVersion: priced.status === 200 ? 2 : 1 },
+        'PUT',
+      )
+    ).status,
+  ).toBe(404);
+});
+it('price items paginate over exactly one tenant/list and preserve database decimal values', async () => {
+  const f = await commercialFixture();
+  const list = await priceListFixture(f);
+  let version = 1;
+  const ids: string[] = [];
+  for (let index = 0; index < 3; index++) {
+    const p = await productFixture(f);
+    ids.push(p.id);
+    const saved = await authenticated(
+      `/price-lists/${list.id}/items/${p.id}`,
+      f.token,
+      { unitPrice: '0.000001', expectedVersion: version++ },
+      'PUT',
+    );
+    expect(saved.status).toBe(200);
+  }
+  const seen: string[] = [];
+  let cursor: string | null = null;
+  do {
+    const page = priceItemListResponseSchema.parse(
+      await (
+        await authenticated(
+          `/price-lists/${list.id}/items?limit=1` + (cursor ? '&cursor=' + cursor : ''),
+          f.token,
+        )
+      ).json(),
+    );
+    expect(page.data).toHaveLength(1);
+    expect(page.data[0]?.unitPrice).toBe('0.000001');
+    seen.push(...page.data.map((row) => row.product.id));
+    cursor = page.pageInfo.nextCursor;
+  } while (cursor);
+  expect(seen.sort()).toEqual(ids.sort());
 });

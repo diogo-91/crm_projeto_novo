@@ -2,7 +2,7 @@
 
 ## Como executar
 
-Cada fase deve ser dividida em PRs pequenos, com contrato, implementação autorizada, testes e documentação. Este roadmap **não autoriza execução das próximas fases**. As fases 0–6 estão concluídas. A fase 7 exige nova solicitação. Não gerar todos os módulos/arquivos de uma vez. Decisões só ganham infraestrutura quando um consumidor real precisar.
+Cada fase deve ser dividida em PRs pequenos, com contrato, implementação autorizada, testes e documentação. Este roadmap **não autoriza execução das próximas fases**. As fases 0–7 e 9 estão concluídas. A fase 8 tem somente ambiente local preparado e foi adiada para a instalação da Evolution na VPS; catálogo é independente e teve autorização explícita. A fase 10 exige nova solicitação. Não gerar todos os módulos/arquivos de uma vez. Decisões só ganham infraestrutura quando um consumidor real precisar.
 
 Definition of Done de uma feature: critérios de negócio claros; isolamento organização/filial/carteira; autorização granular; validação e erros; contrato OpenAPI; migration revisada quando existir; testes críticos; logs sem secrets; UI acessível quando pertinente. Falhas conhecidas e testes não executados são explícitos. Nenhuma fase é concluída apenas por scaffold/build.
 
@@ -92,7 +92,7 @@ Gate: vencimento/fuso/conclusão e visibilidade da timeline cobertos. Se jobs fo
 
 Evidência de 2026-10-07: instalação congelada, lint, typecheck, test, test:integration, build e test:e2e passaram. **383 testes: 223 unitários (75 frontend/DOM incluídos), 10 HTTP, 118 integrações PostgreSQL/Redis/worker e 32 E2E Chromium**. Os 334 cenários anteriores foram preservados. Oito migrations desde banco limpo, seed repetido e atualização incremental local sem reset. FKs/cardinalidades tenant, IDOR em tarefa/histórico/timeline/notificação, quatro scopes, vínculo que não amplia acesso, corrida de conclusão, versionamento e histórico atômico foram cobertos. Datas UTC, intervalo local/DST, preservação de segundos não editados e invalidação do reminder comprovados. Worker real comprova dedupe, cancelamento, lease sem job, indisponibilidade Redis, cinco falhas reais com rollback e replay autorizado sem erro SQL no failedReason. Web cobre interação/follow-up vinculado, entrega/leitura de notificação, concluir/reabrir, troca de tenant, cinco larguras, axe e foco. Banco local recebeu somente a migration nova e seed duas vezes preservou IDs, timestamps, credenciais e dados; Task/Activity/Notification permanecem vazios. pnpm dev iniciou web/API/worker, health/Swagger, APIs autenticadas e job técnico passaram. ADR-016 registra decisões; nenhuma funcionalidade da fase 8 foi iniciada.
 
-## Fase 8 — WhatsApp / Evolution API
+## Fase 8 — WhatsApp / Evolution API (integração adiada)
 
 1. Confirmar versão/capacidades oficiais, sandbox, credenciais, autenticação de webhook e contrato de adapter; ADR de detalhes externos se necessário.
 2. MessagingProvider/EvolutionMessagingProvider, Channel/WhatsAppInstance, Conversation/Message/Attachment, credenciais por conexão e autorização de acesso.
@@ -104,13 +104,15 @@ Evidência de 2026-10-07: instalação congelada, lint, typecheck, test, test:in
 
 Gate: webhook duplicado, inbound e outbound com retries/crash/timeout incerto cobertos; nenhuma perda de evento aceito no cenário validado, sem alegar exactly-once remoto. Troca de grants/sessão derruba acesso socket. Permissões de carteira não recebem payload de outra carteira. Capacidade de reconciliação real do fornecedor documentada; ausência é limitação explícita, não retry cego.
 
-## Fase 9 — Produtos e tabelas de preço
+## Fase 9 — Produtos e tabelas de preço (concluída)
 
 1. Product, SKU, PriceList/Item e escopo organizacional/filial.
 2. Validação decimal/moeda, arquivamento e telas necessárias.
 3. Importação só se requisito: job com checkpoint, idempotência e relatório seguro de erros.
 
 Gate: preços/uniques/tenant e tabelas de filiais testados; alterações em listas não mudam snapshots de documentos futuros. Não implementar estoque/ERP por inferência.
+
+Evidência de 2026-10-08: instalação congelada, lint, typecheck, test, test:integration, build e test:e2e passaram. **434 testes: 250 unitários (79 frontend/DOM incluídos), 10 HTTP, 138 integrações PostgreSQL/Redis/API/worker e 36 E2E Chromium**. Os 383 cenários anteriores foram preservados. Nove migrations desde PostgreSQL limpo e seed repetido; atualização incremental local sem reset preservou identidades/credenciais. Unique de SKU/nome e versão foram testados em requests de atores distintos; FKs cruzadas, quatro scopes, ação sem empréstimo de scope, preço decimal exato, arquivamento/reativação e unidade/moeda/filial imutáveis pela API cobertos. Jornada real configura produto e tabela de filial, edita preço de seis casas, rejeita precisão extra, arquiva/reativa preço e troca organização. Axe/foco e três larguras do catálogo passaram, mantendo as jornadas anteriores. pnpm dev confirmou web/API/worker, health/live/ready, Swagger, catálogo autenticado, rejeição anônima e job técnico. Bundles públicos/logs verificados sem secrets. Seed deixa catálogo vazio e amplia apenas demo para 48 permissões. ADR-017 registra decisões e fase 8 adiada; nenhuma dependência, estoque, ERP, importação ou funcionalidade de orçamento adicionada.
 
 ## Fase 10 — Orçamentos
 
@@ -169,4 +171,4 @@ Gate: evidência de restore e reconciliação, incidentes simulados, limites por
 | SLA, retenção, bases legais e HA                       | refinados ao longo das features, obrigatórios antes de produção              |
 | ERP não detalhado em requisitos                        | incremento separado, depois de contrato e processo comercial definidos       |
 
-Cada conclusão exige evidência dos gates acima. As fases 0–6 estão encerradas. A fase 7 exige autorização explícita. Não antecipar os demais módulos comerciais.
+Cada conclusão exige evidência dos gates acima. As fases 0–7 e 9 estão encerradas. A integração da fase 8 está adiada; a fase 10 exige autorização explícita. Não antecipar os demais módulos comerciais.

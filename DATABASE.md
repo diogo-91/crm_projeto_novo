@@ -2,7 +2,7 @@
 
 ## 1. Estado e decisões
 
-O ERD abaixo é um modelo **conceitual futuro**, não uma ordem para gerar schema/migrations comerciais. A fase 1 criou InfrastructureMetadata. A fase 2 materializa exclusivamente Organization, Branch, User global, OrganizationMembership e MembershipBranch; consulte a seção de modelo físico atual, README e ADR-011. A fase 3 acrescenta credenciais, sessões e RBAC conforme a seção física ao final e ADR-012. A fase 5 acrescenta Contact, Company, Tag, ContactTag e históricos mínimos de atribuição, conforme ADR-014 e a seção física abaixo. A fase 6 acrescenta leads, pipelines/etapas, oportunidades e históricos mínimos, conforme ADR-015 e a seção física ao final. O restante do ERD continua futuro. Campos e cardinalidades serão refinados por módulo; os limites de tenant e invariantes já são decisões obrigatórias. PostgreSQL com Prisma, schema compartilhado e `organization_id` em entidades tenant. Identidade `User` é global; empresa cliente `Company` é diferente de `Organization`.
+O ERD abaixo é um modelo **conceitual futuro**, não uma ordem para gerar schema/migrations comerciais. A fase 1 criou InfrastructureMetadata. A fase 2 materializa exclusivamente Organization, Branch, User global, OrganizationMembership e MembershipBranch; consulte a seção de modelo físico atual, README e ADR-011. A fase 3 acrescenta credenciais, sessões e RBAC conforme a seção física ao final e ADR-012. A fase 5 acrescenta Contact, Company, Tag, ContactTag e históricos mínimos de atribuição, conforme ADR-014 e a seção física abaixo. A fase 6 acrescenta leads, pipelines/etapas, oportunidades e históricos mínimos, conforme ADR-015 e a seção física ao final. As fases 7 e 9 acrescentam tarefas/timeline/lembretes e catálogo/preços, descritos nas respectivas seções físicas. A fase 8 está adiada. O restante do ERD continua futuro. Campos e cardinalidades serão refinados por módulo; os limites de tenant e invariantes já são decisões obrigatórias. PostgreSQL com Prisma, schema compartilhado e `organization_id` em entidades tenant. Identidade `User` é global; empresa cliente `Company` é diferente de `Organization`.
 
 UUID gerado pela aplicação/Prisma ou default PostgreSQL compatível com a versão escolhida. Começar com UUID v4; avaliar v7 apenas com suporte real e medição, sem substituir UUID por sequências públicas. Datas `timestamptz` em UTC; frontend converte para fuso da organização/usuário. Horários de automações/metas precisam armazenar também o fuso IANA usado na definição do período para lidar com mudanças de horário.
 
@@ -846,3 +846,33 @@ erDiagram
 - Índices: Task tenant+createdAt+id para lista, tenant+owner+dueAt+id para carteira/vencimento, tenant+branch+createdAt+id, tenant+targetID por referência; TaskHistory tenant+createdAt+id e unique de versão; Activity tenant+targetID+createdAt+id; TaskReminder state+availableAt+leaseUntil+id para reconciliação; Notification tenant+recipient+createdAt+id para caixa. Índices auxiliares tenant+id dão suporte às FKs compostas. Sorts alternativos e busca substring não prometem B-tree específico antes de medição.
 
 Task.reminderVersion incrementa somente ao mudar destino, alvo, datas ou lifecycle. Cancelar/agendar é parte da mesma transação da tarefa; título/descrição/prioridade não repetem a entrega. Consumidor conclui intenção e insere Notification na mesma transação, sob locks membership/tarefa/intenção. Sem delete físico automático de falhas/checkpoints: retenção futura precisa preservar a deduplicação. O seed mantém demo estrutural, atualiza 44 permissões e seis templates somente na demo, sem Task/Activity/Notification fictícios.
+
+## Modelo físico implementado — fase 9
+
+Migration incremental `20261008140000_create_products_price_lists`, gerada por Prisma migrate diff e revisada com CHECKs SQL. As oito migrations anteriores são imutáveis. Nenhuma concessão de privilégio na migration. ADR-017 registra catálogo e a execução da fase 9 independente da fase 8 adiada.
+
+| Modelo        | Relacionamentos e invariantes                                                                                                                                                                                                            |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Product       | Organization obrigatória; autores por `(organizationId,membershipId)`; SKU obrigatório uppercase/ASCII unique tenant inclusive arquivados; name/unidade não vazios; active e version >= 1.                                               |
+| PriceList     | Organization obrigatória, Branch opcional por FK `(organizationId,branchId)`; autores tenant; normalizedName único no tenant inclusive arquivadas; moeda BRL/USD/EUR/GBP; active/version. Moeda e filial imutáveis pela API.             |
+| PriceListItem | FKs `(organizationId,priceListId)` e `(organizationId,productId)`; autor de atualização tenant; unique `(organizationId,priceListId,productId)`; numeric(18,6) não negativo; active e timestamps. Versionamento é do agregado PriceList. |
+
+```mermaid
+erDiagram
+  Organization ||--o{ Product : owns
+  Organization ||--o{ PriceList : defines
+  Branch o|--o{ PriceList : specializes
+  PriceList ||--o{ PriceListItem : contains
+  Product ||--o{ PriceListItem : priced
+  OrganizationMembership ||--o{ Product : authors
+  OrganizationMembership ||--o{ PriceList : authors
+  OrganizationMembership ||--o{ PriceListItem : updates
+```
+
+FKs são RESTRICT para exclusão/mudança de tenant; não há hard delete nem deletedAt automático. Arquivamento conserva preços e identidades únicas. Índices tenant+name/createdAt/updatedAt+id atendem as três ordenações keyset usadas; tenant+branch+id restringe listas, tenant+list+id pagina itens e tenant+product atende referências e integridade. Uniques também atendem buscas de SKU e produto/lista. Busca substring não é acelerada por B-tree; medir antes de trigram/full-text.
+
+SKU é normalizado na fronteira; CHECK impede chave não normalizada em SQL direto. Nome normalizado de lista colapsa espaços e usa lowercase, coerente com CHECK existente de catálogos. Unidade é texto escolhido na criação, fixo pela API para não reinterpretar preços; sem classificação fiscal ou conversão. DTO aceita até 12 inteiros/seis decimais por preço e rejeita precisão excedente antes da coerção numeric; SQL numeric possui sua semântica nativa de escala. API serializa preço em string com seis casas, inclusive zero. Sem valores IEEE-754 ou conversão cambial.
+
+Mutações de preço travam lista, verificam expectedVersion e produto ativo sob lock; incrementam versão/autor da lista na mesma transação. Produto arquivado preserva preços anteriores, porém não recebe novos preços. Item arquivado pode ser reativado explicitamente com preço informado e versão vigente. Não há histórico temporal do preço nesta fase; snapshots de documentos pertencem à fase 10 e deverão preservar o valor então contratado.
+
+Seed atualiza idempotentemente apenas demo e provisionamento de novas organizações para 48 permissões (quatro novas: products.read/manage, price-lists.read/manage). Não cria produtos/listas/preços fictícios nem amplia todos os grants de tenants existentes. UI usa projeções explícitas, sem campos internos de autores/tenant. A integração testa banco limpo, seed repetido, FK cruzada, uniques/corridas, decimal exato, escopos e preservação de referências.

@@ -94,16 +94,24 @@ export class CommercialDirectoryGateway {
       query.limit,
     );
   }
+  async branchLabels(tx: DatabaseTransaction, organizationId: string, branchIds: string[]) {
+    const rows = await tx.branch.findMany({
+      where: { organizationId, id: { in: [...new Set(branchIds)] } },
+      select: { id: true, name: true },
+    });
+    return new Map(rows.map((row) => [row.id, row]));
+  }
   async labels(
     tx: DatabaseTransaction,
     organizationId: string,
     records: { branchId: string; ownerMembershipId: string }[],
   ) {
     const [branches, members] = await Promise.all([
-      tx.branch.findMany({
-        where: { organizationId, id: { in: [...new Set(records.map((row) => row.branchId))] } },
-        select: { id: true, name: true },
-      }),
+      this.branchLabels(
+        tx,
+        organizationId,
+        records.map((row) => row.branchId),
+      ),
       tx.organizationMembership.findMany({
         where: {
           organizationId,
@@ -117,7 +125,7 @@ export class CommercialDirectoryGateway {
       members.map((row) => row.userId),
     );
     return {
-      branches: new Map(branches.map((row) => [row.id, row])),
+      branches,
       owners: new Map(
         members.map((row) => {
           const user = users.get(row.userId);

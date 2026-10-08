@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { amountSchema, currencySchema } from './money.js';
+export { amountSchema, currencySchema } from './money.js';
 import { uuidSchema, listQuerySchema } from './organizations.js';
 import { emailSchema } from './identity.js';
 import { phoneSchema, commercialListQuerySchema, contactSourceSchema } from './commercial.js';
@@ -9,10 +11,6 @@ const version = z.number().int().min(1);
 const timestamps = { createdAt: z.iso.datetime(), updatedAt: z.iso.datetime(), version };
 export const leadStatusSchema = z.enum(['NEW', 'QUALIFIED', 'DISQUALIFIED', 'CONVERTED']);
 export const dealStatusSchema = z.enum(['OPEN', 'WON', 'LOST']);
-export const currencySchema = z.enum(['BRL', 'USD', 'EUR', 'GBP']);
-export const amountSchema = z
-  .string()
-  .regex(/^\d{1,15}(\.\d{1,4})?$/, 'Informe valor positivo com até quatro casas decimais.');
 const assignment = {
   name,
   branchId: uuidSchema,

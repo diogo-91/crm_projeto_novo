@@ -1,3 +1,6 @@
+import { ProductList } from '@/features/catalog/product-list';
+import { ProductForm } from '@/features/catalog/product-form';
+import { PriceListCreateForm } from '@/features/catalog/price-list-form';
 import { render, screen, waitFor } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, it, expect, vi } from 'vitest';
@@ -336,4 +339,98 @@ it('query failure messages do not expose technical errors', () => {
   render(<QueryError error={new Error('Prisma P2002 passwordHash internal')} retry={vi.fn()} />);
   expect(screen.queryByText(/P2002/)).toBeNull();
   expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeTruthy();
+});
+
+it('catalog read-only renders products without a management action', async () => {
+  setup(
+    () => json({ data: [], pageInfo: { hasNextPage: false, nextCursor: null } }),
+    ['products.read'],
+  );
+  render(
+    <Harness>
+      <ProductList />
+    </Harness>,
+  );
+  await screen.findByText('Nenhum registro encontrado');
+  expect(screen.queryByRole('button', { name: 'Novo produto' })).toBeNull();
+});
+it('catalog denied state does not request product data', async () => {
+  const transport = setup(undefined, []);
+  render(
+    <Harness>
+      <ProductList />
+    </Harness>,
+  );
+  await screen.findByText('Acesso negado');
+  expect(
+    transport.mock.calls.filter(([input]) =>
+      (typeof input === 'string' ? input : input instanceof URL ? input.href : input.url).includes(
+        '/products?',
+      ),
+    ),
+  ).toHaveLength(0);
+});
+it('product form normalizes SKU and sends an explicit validated contract', async () => {
+  const transport = setup(
+    () =>
+      json({
+        id,
+        name: 'Product',
+        sku: 'SKU-1',
+        unit: 'UN',
+        description: null,
+        active: true,
+        version: 1,
+        ...dates,
+      }),
+    ['products.read', 'products.manage'],
+  );
+  const user = userEvent.setup();
+  const saved = vi.fn();
+  render(
+    <Harness>
+      <ProductForm onSaved={saved} />
+    </Harness>,
+  );
+  await user.type(await screen.findByRole('textbox', { name: 'Nome do produto' }), 'Product');
+  await user.type(screen.getByRole('textbox', { name: 'SKU' }), ' sku-1 ');
+  await user.click(screen.getByRole('button', { name: 'Salvar produto' }));
+  await waitFor(() => expect(saved).toHaveBeenCalledOnce());
+  const call = transport.mock.calls.find(
+    ([input, init]) =>
+      (typeof input === 'string' ? input : input instanceof URL ? input.href : input.url).endsWith(
+        '/products',
+      ) && init?.method === 'POST',
+  );
+  expect(call).toBeDefined();
+  const payload = call?.[1]?.body;
+  if (typeof payload !== 'string') throw new Error('Expected JSON request body');
+  expect(JSON.parse(payload) as unknown).toEqual({
+    name: 'Product',
+    sku: 'SKU-1',
+    unit: 'UN',
+    description: null,
+  });
+});
+it('branch-only price management requires an authorized branch and never enables an organizational list implicitly', async () => {
+  setup(
+    () =>
+      json({
+        data: [{ id: branchId, name: 'Branch' }],
+        pageInfo: { hasNextPage: false, nextCursor: null },
+        organizationAllowed: false,
+      }),
+    ['price-lists.manage'],
+  );
+  const user = userEvent.setup();
+  render(
+    <Harness>
+      <PriceListCreateForm onSaved={vi.fn()} />
+    </Harness>,
+  );
+  const select = await screen.findByRole('combobox', { name: 'Disponível para' });
+  await waitFor(() => expect(select).toHaveProperty('disabled', false));
+  expect(screen.getByRole('button', { name: 'Salvar tabela' })).toHaveProperty('disabled', true);
+  await user.selectOptions(select, branchId);
+  expect(screen.getByRole('button', { name: 'Salvar tabela' })).toHaveProperty('disabled', false);
 });

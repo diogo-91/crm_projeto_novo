@@ -34,3 +34,6 @@ export * from './commercial.js';
 export * from './sales.js';
 
 export * from './tasks.js';
+
+export * from './money.js';
+export * from './catalog.js';

@@ -19,6 +19,8 @@ model InfrastructureMetadata {
 }
 
 model Organization {
+  products   Product[]
+  priceLists PriceList[]
   tasks      Task[]
   activities Activity[]
 
@@ -43,6 +45,7 @@ model Organization {
 }
 
 model Branch {
+  priceLists               PriceList[]
   opportunityHistoryFrom   OpportunityAssignmentHistory[] @relation("OpportunityHistoryBranchFrom")
   opportunityHistoryTo     OpportunityAssignmentHistory[] @relation("OpportunityHistoryBranchTo")
   leadHistoryFrom          LeadAssignmentHistory[]        @relation("LeadHistoryBranchFrom")
@@ -88,12 +91,17 @@ model User {
 }
 
 model OrganizationMembership {
-  taskAuthors   Task[]         @relation("TaskCreator")
-  taskUpdates   Task[]         @relation("TaskUpdater")
-  taskHistory   TaskHistory[]
-  activities    Activity[]     @relation("ActivityActor")
-  notifications Notification[]
-  taskReminders TaskReminder[]
+  createdProducts   Product[]       @relation("ProductCreator")
+  updatedProducts   Product[]       @relation("ProductUpdater")
+  createdPriceLists PriceList[]     @relation("PriceListCreator")
+  updatedPriceLists PriceList[]     @relation("PriceListUpdater")
+  updatedPrices     PriceListItem[] @relation("PriceUpdater")
+  taskAuthors       Task[]          @relation("TaskCreator")
+  taskUpdates       Task[]          @relation("TaskUpdater")
+  taskHistory       TaskHistory[]
+  activities        Activity[]      @relation("ActivityActor")
+  notifications     Notification[]
+  taskReminders     TaskReminder[]
 
   opportunityHistoryActor OpportunityAssignmentHistory[] @relation("OpportunityHistoryActor")
   opportunityHistoryFrom  OpportunityAssignmentHistory[] @relation("OpportunityHistoryOwnerFrom")
@@ -855,4 +863,78 @@ model Notification {
   @@unique([organizationId, id])
   @@index([organizationId, recipientMembershipId, createdAt, id])
   @@map("notifications")
+}
+
+model Product {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  organizationId        String                 @map("organization_id") @db.Uuid
+  sku                   String                 @db.VarChar(64)
+  name                  String                 @db.VarChar(160)
+  description           String?                @db.VarChar(2000)
+  unit                  String                 @db.VarChar(32)
+  active                Boolean                @default(true)
+  version               Int                    @default(1)
+  createdByMembershipId String                 @map("created_by_membership_id") @db.Uuid
+  updatedByMembershipId String                 @map("updated_by_membership_id") @db.Uuid
+  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  creator               OrganizationMembership @relation("ProductCreator", fields: [organizationId, createdByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  updater               OrganizationMembership @relation("ProductUpdater", fields: [organizationId, updatedByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  prices                PriceListItem[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, sku])
+  @@index([organizationId, name, id])
+  @@index([organizationId, createdAt, id])
+  @@index([organizationId, updatedAt, id])
+  @@map("products")
+}
+
+model PriceList {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  organizationId        String                 @map("organization_id") @db.Uuid
+  branchId              String?                @map("branch_id") @db.Uuid
+  name                  String                 @db.VarChar(160)
+  normalizedName        String                 @map("normalized_name") @db.VarChar(160)
+  currency              String                 @db.VarChar(3)
+  active                Boolean                @default(true)
+  version               Int                    @default(1)
+  createdByMembershipId String                 @map("created_by_membership_id") @db.Uuid
+  updatedByMembershipId String                 @map("updated_by_membership_id") @db.Uuid
+  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  branch                Branch?                @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  creator               OrganizationMembership @relation("PriceListCreator", fields: [organizationId, createdByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  updater               OrganizationMembership @relation("PriceListUpdater", fields: [organizationId, updatedByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  items                 PriceListItem[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, normalizedName])
+  @@index([organizationId, branchId, id])
+  @@index([organizationId, name, id])
+  @@index([organizationId, createdAt, id])
+  @@index([organizationId, updatedAt, id])
+  @@map("price_lists")
+}
+
+model PriceListItem {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  organizationId        String                 @map("organization_id") @db.Uuid
+  priceListId           String                 @map("price_list_id") @db.Uuid
+  productId             String                 @map("product_id") @db.Uuid
+  unitPrice             Decimal                @map("unit_price") @db.Decimal(18, 6)
+  active                Boolean                @default(true)
+  updatedByMembershipId String                 @map("updated_by_membership_id") @db.Uuid
+  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+  priceList             PriceList              @relation(fields: [organizationId, priceListId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  product               Product                @relation(fields: [organizationId, productId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  updater               OrganizationMembership @relation("PriceUpdater", fields: [organizationId, updatedByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, priceListId, productId])
+  @@index([organizationId, priceListId, id])
+  @@index([organizationId, productId])
+  @@map("price_list_items")
 }
