@@ -52,6 +52,8 @@ O parsing de processos está centralizado em `@crm/config/server` e o parsing p�
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | NODE_ENV                                        | development/test/production; obrigatória para API/worker                                         |
 | API_PORT                                        | porta da API, inteiro 1–65535                                                                    |
+| API_HOST                                        | IP de escuta; padrão 127.0.0.1 local e 0.0.0.0 no container de produção                          |
+| TRUST_PROXY_CIDRS                               | lista explícita de IPs/CIDRs confiáveis; vazia por padrão, IP exato do proxy em produção         |
 | DATABASE_URL                                    | PostgreSQL válido, requerido API, worker de lembretes e ferramentas Prisma                       |
 | REDIS_HOST / REDIS_PORT                         | conexão Redis, obrigatórias API/worker                                                           |
 | REDIS_PASSWORD                                  | opcional na biblioteca quando a instalação não exige senha; **obrigatória no Compose fornecido** |
@@ -445,3 +447,11 @@ Comprador, nome da tabela, SKU/descrição/unidade/preço são snapshots. Editar
 Migration incremental `20261008180000_create_quotes` preserva as nove anteriores. Seed mantém catálogo/documentos vazios e atualiza templates apenas da demo/novas organizações para 52 permissões. Tenants anteriores precisam de concessão administrativa explícita das novas ações. Nenhum serviço, variável de ambiente ou dependência adicional é necessário. Use os comandos de instalação, migrations, testes e desenvolvimento já descritos neste README; testes usam bancos descartáveis, nunca resetam o banco local.
 
 Evidência final da fase 10 em **2026-10-08**: `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm test:integration`, `pnpm build` e `pnpm test:e2e` PASS. **476 testes**: 276 unitários (83 frontend/DOM incluídos), 10 HTTP, 150 integrações PostgreSQL/Redis/API/worker e 40 E2E Chromium. Todas as dez migrations passaram em banco limpo; atualização incremental local e seed duas vezes preservaram identidades/credenciais. Aprovação/revisão, snapshots, cálculos, constraints, idempotência, concorrência, isolamento e acessibilidade foram validados. Web/API/worker, health, Swagger, leituras autenticadas e job técnico funcionaram; bundles públicos/logs sem secrets. A CI existente cobre as suites; execução remota não foi verificada nesta sessão. Fase 10 concluída; nenhuma funcionalidade da fase 11 implementada.
+
+## Deploy no Coolify
+
+Pacote de publicação em `Dockerfile` e `docker-compose.production.yml`, com web/API/worker, PostgreSQL/Redis privados, migration one-shot e provisionamento explícito do administrador inicial. Use Coolify/Traefik em modo Raw, um único domínio HTTPS e IP exato do proxy. Não usar Compose de desenvolvimento ou seed demo em produção.
+
+Siga [docs/DEPLOYMENT_COOLIFY.md](docs/DEPLOYMENT_COOLIFY.md) para configurar rede, domínio, secrets, primeiro administrador, migrations, verificação e backup/rollback. Variáveis sem valores privados em `deploy/production.env.example`. `pnpm test:deploy` constrói e valida o pacote em containers/redes/volumes descartáveis com HTTPS verificado, sem conectar à VPS. ADR-019 registra as decisões e limites; preparar o pacote não realiza deploy externo.
+
+Validação local do pacote em **2026-10-08**: instalação congelada, lint, typecheck, testes e build PASS. **502 testes** executados: 292 unitários/DOM, 10 HTTP, 150 integrações, 40 E2E e 10 testes dos containers de produção. Estes últimos verificam as dez migrations em banco vazio, provisionamento concorrente/repetição, HTTPS/cookies/refresh/Origin, headers forjados, fila, usuário non-root, portas privadas, assets sem secrets, restart e shutdown. CI inclui `pnpm test:deploy`; execução remota da CI e publicação na VPS não foram verificadas nesta tarefa.

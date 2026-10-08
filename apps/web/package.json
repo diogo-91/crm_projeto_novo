@@ -5,8 +5,8 @@
   "name": "@crm/web",
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
-    "build": "next build",
-    "start": "next start --hostname 127.0.0.1",
+    "build": "next build && node ../../scripts/prepare-web-standalone.mjs",
+    "start": "HOSTNAME=127.0.0.1 node .next/standalone/apps/web/server.js",
     "lint": "eslint .",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run --config ../../vitest.frontend.config.mts"

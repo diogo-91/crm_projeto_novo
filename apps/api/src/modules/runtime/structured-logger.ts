@@ -38,6 +38,7 @@ export class StructuredLogger implements LoggerService {
         'accessToken',
         'JWT_SECRET',
         'SEED_ADMIN_PASSWORD',
+        'INITIAL_ADMIN_PASSWORD',
         'token',
         'secret',
         'DATABASE_URL',

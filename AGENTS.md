@@ -190,3 +190,9 @@ Organizations usa camadas domain/application/infrastructure/presentation; owns O
 - Owner é o criador na criação e preservado na revisão; filial e owner precisam de vínculo. Permissões quotes.read/create/update/approve, scope da mesma ação. Aprovação não ocorre por nome de papel e não implica envio/aceite.
 - Migration `20261008180000_create_quotes` e CHECKs/triggers financeiros devem ser preservados. Seed demo/novo tenant tem 52 permissões, sem catálogo/propostas sintéticas; não ampliar grants de tenants existentes automaticamente.
 - PDF/storage/ERP/envio/outbox só com solicitação e consumidor real. Nenhum novo serviço/env/dependência nesta fase.
+
+## Pacote de deploy
+
+Leia ADR-019 e docs/DEPLOYMENT_COOLIFY.md antes de alterar Docker/rede/bootstrap. Dockerfile multi-stage com versões/digests fixos, lockfile congelado, usuário node, Next standalone e backend compartilhado API/worker. Compose production usa rede backend privada, proxy Traefik externo e modo Raw do Coolify; nenhuma porta de banco é publicada. API_HOST é IP validado, padrão loopback; TRUST_PROXY_CIDRS só aceita IP/CIDR explícito, nunca true, wildcard ou /0. Não copiar secrets/CA corporativa em imagens; CA opcional de build usa somente secret temporário BuildKit.
+
+Inicialização de produção exige confirmação e banco sem Organization/User, transação/advisory lock e gateways proprietários; não é seed demo, endpoint ou startup automático. Não atribui PlatformGrant nem redefine credenciais em repetição. `pnpm test:deploy` valida instalação/HTTPS/auth/filas/imagens reais em recursos crm-deploy-* próprios. Deploy/migration da VPS continua exigindo autorização específica. Não iniciar fase 11 por causa deste pacote.

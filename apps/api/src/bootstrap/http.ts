@@ -1,5 +1,5 @@
 import { refreshCookieName } from '../common/auth-cookie.js';
-import type { INestApplication } from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import type { ApiConfig } from '@crm/config/server';
@@ -7,10 +7,11 @@ import { requestContext } from '../common/request-context.js';
 import { HttpErrorFilter } from '../common/http-error.filter.js';
 import type { StructuredLogger } from '../modules/runtime/index.js';
 export function configureHttp(
-  app: INestApplication,
+  app: NestExpressApplication,
   config: ApiConfig,
   logger: StructuredLogger,
 ): void {
+  app.set('trust proxy', config.TRUST_PROXY_CIDRS.length ? config.TRUST_PROXY_CIDRS : false);
   app.use(requestContext(logger));
   app.use(helmet());
   app.enableCors({

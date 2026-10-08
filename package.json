@@ -24,7 +24,8 @@
     "infra:up": "docker compose up -d --wait postgres redis",
     "infra:down": "docker compose down",
     "queue:probe": "dotenv -e .env -- pnpm --filter @crm/api queue:probe",
-    "test:e2e": "pnpm build && dotenv -e .env -- playwright test"
+    "test:e2e": "pnpm build && dotenv -e .env -- playwright test",
+    "test:deploy": "vitest run --config vitest.deploy.config.mts"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",

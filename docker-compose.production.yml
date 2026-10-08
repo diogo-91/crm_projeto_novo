@@ -1,0 +1,185 @@
+x-build: &build
+  context: .
+  dockerfile: Dockerfile
+  args:
+    NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Set NEXT_PUBLIC_API_URL}
+x-runtime: &runtime
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 45s
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging:
+    driver: json-file
+    options: { max-size: '10m', max-file: '3' }
+x-backend-environment: &backend-environment
+  NODE_ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+services:
+  postgres:
+    <<: *runtime
+    image: postgres:18@sha256:fc973eb97c9fd04bfa1840e0f510719a584ccb3be8debfe6a4144637a9dfe8cf
+    cap_drop: []
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-crm}
+      POSTGRES_USER: ${POSTGRES_USER:-crm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes: [postgres_data:/var/lib/postgresql]
+    networks: [backend]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    labels: [traefik.enable=false]
+  redis:
+    <<: *runtime
+    image: redis:8@sha256:c94085d298b738be22c9ccdc0ac3761fa6649df7dd82ad1d42367f3cb9714935
+    cap_drop: []
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+    command:
+      [
+        'sh',
+        '-c',
+        'exec redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"',
+      ]
+    volumes: [redis_data:/data]
+    networks: [backend]
+    healthcheck:
+      test: ['CMD-SHELL', 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    labels: [traefik.enable=false]
+  migrate:
+    profiles: [operations]
+    build: { <<: *build, target: operations }
+    init: true
+    restart: 'no'
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+    networks: [backend]
+    depends_on:
+      postgres: { condition: service_healthy }
+    labels: [traefik.enable=false]
+  api:
+    <<: *runtime
+    build: { <<: *build, target: api }
+    environment:
+      <<: *backend-environment
+      API_HOST: 0.0.0.0
+      API_PORT: 3001
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS}
+      TRUST_PROXY_CIDRS: ${TRUST_PROXY_CIDRS:?Set the exact trusted proxy IP/CIDR}
+    networks: [backend, proxy]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${COOLIFY_PROXY_NETWORK:-coolify}
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-api.rule=Host(`${CRM_HOST:?Set CRM_HOST}`) && (PathPrefix(`/api/v1/`) || Path(`/api/v1`) || PathPrefix(`/health`))
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-api.entrypoints=https
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-api.tls=true
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-api.tls.certresolver=letsencrypt
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-api.priority=100
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-api.service=${CRM_DEPLOYMENT_NAME:-crm}-api
+      - traefik.http.services.${CRM_DEPLOYMENT_NAME:-crm}-api.loadbalancer.server.port=3001
+  worker:
+    <<: *runtime
+    build: { <<: *build, target: worker }
+    environment: *backend-environment
+    networks: [backend]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    labels: [traefik.enable=false]
+  web:
+    <<: *runtime
+    build: { <<: *build, target: web }
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+    networks: [proxy]
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${COOLIFY_PROXY_NETWORK:-coolify}
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-web.rule=Host(`${CRM_HOST:?Set CRM_HOST}`)
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-web.entrypoints=https
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-web.tls=true
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-web.tls.certresolver=letsencrypt
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-web.priority=10
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-web.service=${CRM_DEPLOYMENT_NAME:-crm}-web
+      - traefik.http.services.${CRM_DEPLOYMENT_NAME:-crm}-web.loadbalancer.server.port=3000
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-http.rule=Host(`${CRM_HOST:?Set CRM_HOST}`)
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-http.entrypoints=http
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-http.middlewares=${CRM_DEPLOYMENT_NAME:-crm}-https
+      - traefik.http.routers.${CRM_DEPLOYMENT_NAME:-crm}-http.service=${CRM_DEPLOYMENT_NAME:-crm}-web
+      - traefik.http.middlewares.${CRM_DEPLOYMENT_NAME:-crm}-https.redirectscheme.scheme=https
+      - traefik.http.middlewares.${CRM_DEPLOYMENT_NAME:-crm}-https.redirectscheme.permanent=true
+  initial-setup:
+    build: { <<: *build, target: api }
+    profiles: [operations]
+    init: true
+    restart: 'no'
+    command: [node, apps/api/dist/bootstrap/initial-setup.js]
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      INITIAL_SETUP_CONFIRM: ${INITIAL_SETUP_CONFIRM:-}
+      INITIAL_ORGANIZATION_NAME: ${INITIAL_ORGANIZATION_NAME:-}
+      INITIAL_BRANCH_NAME: ${INITIAL_BRANCH_NAME:-}
+      INITIAL_BRANCH_CODE: ${INITIAL_BRANCH_CODE:-}
+      INITIAL_ADMIN_NAME: ${INITIAL_ADMIN_NAME:-}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+    networks: [backend]
+    depends_on:
+      postgres: { condition: service_healthy }
+    labels: [traefik.enable=false]
+networks:
+  backend:
+    internal: true
+  proxy:
+    external: true
+    name: ${COOLIFY_PROXY_NETWORK:-coolify}
+volumes:
+  postgres_data:
+  redis_data:

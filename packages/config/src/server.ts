@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { emailSchema, newPasswordSchema } from '@crm/contracts';
+import { isIP } from 'node:net';
+import {
+  emailSchema,
+  newPasswordSchema,
+  createOrganizationSchema,
+  createBranchSchema,
+} from '@crm/contracts';
 export type EnvironmentInput = Readonly<Record<string, unknown>>;
 const port = z.coerce.number().int().min(1).max(65535);
 const origin = z.url().pipe(
@@ -29,6 +35,36 @@ const database = z.object({
 });
 const api = common.extend(database.shape).extend({
   API_PORT: port,
+  API_HOST: z
+    .string()
+    .refine((value) => isIP(value) !== 0, 'Expected an IP address')
+    .default('127.0.0.1'),
+  TRUST_PROXY_CIDRS: z
+    .string()
+    .default('')
+    .transform((value) =>
+      value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean),
+    )
+    .pipe(
+      z.array(
+        z.string().refine((value) => {
+          const parts = value.split('/');
+          const address = parts[0] ?? '';
+          const family = isIP(address);
+          if (family === 0 || parts.length > 2) return false;
+          if (parts.length === 1) return true;
+          const prefix = parts[1] ?? '';
+          return (
+            /^\d+$/.test(prefix) &&
+            Number(prefix) >= 1 &&
+            Number(prefix) <= (family === 4 ? 32 : 128)
+          );
+        }, 'Expected an explicit IP or bounded CIDR'),
+      ),
+    ),
   JWT_SECRET: z
     .string()
     .regex(/^[A-Za-z0-9_-]{43}$/)
@@ -79,7 +115,7 @@ export function parseSeedEnvironment(input: EnvironmentInput) {
     ...parse(
       database.extend({
         NODE_ENV: z.enum(['development', 'test']),
-        LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
+        LOG_LEVEL: common.shape.LOG_LEVEL,
         SEED_ADMIN_PASSWORD: newPasswordSchema,
         SEED_ADMIN_EMAIL: emailSchema.default('admin.demo@example.test'),
         SEED_PLATFORM_PROVISIONING: z
@@ -94,3 +130,24 @@ export function parseSeedEnvironment(input: EnvironmentInput) {
 }
 export type SeedConfig = ReturnType<typeof parseSeedEnvironment>;
 export type DatabaseConfig = ReturnType<typeof parseDatabaseEnvironment>;
+
+export function parseInitialSetupEnvironment(input: EnvironmentInput) {
+  return {
+    ...parse(
+      database.extend({
+        NODE_ENV: z.literal('production'),
+        LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
+        INITIAL_SETUP_CONFIRM: z.literal('CREATE_FIRST_ORGANIZATION'),
+        INITIAL_ORGANIZATION_NAME: createOrganizationSchema.shape.name,
+        INITIAL_BRANCH_NAME: createBranchSchema.shape.name,
+        INITIAL_BRANCH_CODE: createBranchSchema.shape.code,
+        INITIAL_ADMIN_NAME: z.string().trim().min(1).max(160),
+        INITIAL_ADMIN_EMAIL: emailSchema,
+        INITIAL_ADMIN_PASSWORD: newPasswordSchema,
+      }),
+      input,
+    ),
+    role: 'initial-setup' as const,
+  };
+}
+export type InitialSetupConfig = ReturnType<typeof parseInitialSetupEnvironment>;

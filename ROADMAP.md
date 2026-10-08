@@ -173,4 +173,10 @@ Gate: evidência de restore e reconciliação, incidentes simulados, limites por
 | SLA, retenção, bases legais e HA                       | refinados ao longo das features, obrigatórios antes de produção              |
 | ERP não detalhado em requisitos                        | incremento separado, depois de contrato e processo comercial definidos       |
 
-Cada conclusão exige evidência dos gates acima. As fases 0–7 e 9 estão encerradas. A integração da fase 8 está adiada; a fase 10 exige autorização explícita. Não antecipar os demais módulos comerciais.
+Cada conclusão exige evidência dos gates acima. As fases 0–7, 9 e 10 estão encerradas. A integração da fase 8 está adiada; a fase 11 exige autorização explícita. Não antecipar os demais módulos comerciais.
+
+## Incremento autorizado — pacote de deploy Coolify
+
+Preparar Dockerfile/Compose de produção, origem única HTTPS/Traefik, confiança explícita de proxy, migrations one-shot e primeiro administrador por comando privado em banco vazio. ADR-019 e docs/DEPLOYMENT_COOLIFY.md registram decisões/operação. Esta entrega não autoriza deploy/migration da VPS, novas funcionalidades ou encerramento integral da fase 14. Gate: build/qualidade/suites existentes e test:deploy real com instalação limpa, HTTPS verificado, cookies, provisionamento, filas, segurança de imagem e restart/shutdown.
+
+Concluído em **2026-10-08**: install/lint/typecheck/test/build PASS; 502 testes locais, incluindo 150 integrações, 40 E2E e 10 testes do pacote de produção. Instalação limpa com todas as dez migrations e comandos operacionais foi validada. Nenhum deploy ou migration foi executado na VPS.

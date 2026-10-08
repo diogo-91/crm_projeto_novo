@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { Controller, Get } from '@nestjs/common';
 import { AuthService } from '../auth/index.js';
 import { Test } from '@nestjs/testing';
-import type { INestApplication } from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { parseApiEnvironment } from '@crm/config/server';
 import { healthResponseSchema } from '@crm/contracts';
@@ -32,7 +32,7 @@ class MissingPolicyController {
     return { status: 'should-not-be-visible' };
   }
 }
-let app: INestApplication;
+let app: NestExpressApplication;
 let url: string;
 const database = { ping: vi.fn<() => Promise<void>>() };
 const redis = { ping: vi.fn<() => Promise<void>>() };
@@ -70,7 +70,7 @@ beforeEach(async () => {
     .overrideProvider(TechnicalQueueService)
     .useValue({})
     .compile();
-  app = module.createNestApplication({ logger: false });
+  app = module.createNestApplication<NestExpressApplication>({ logger: false });
   configureHttp(app, config, app.get(StructuredLogger));
   await app.listen(0, '127.0.0.1');
   url = await app.getUrl();

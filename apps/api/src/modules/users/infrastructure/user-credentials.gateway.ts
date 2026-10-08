@@ -38,6 +38,19 @@ export class UserCredentialsGateway {
   async invalidate(transaction: DatabaseTransaction, id: string) {
     await transaction.user.update({ where: { id }, data: { securityVersion: { increment: 1 } } });
   }
+  async createInitialAdministrator(
+    transaction: DatabaseTransaction,
+    input: { name: string; email: string },
+    passwordHash: string,
+  ) {
+    if ((await transaction.user.count()) !== 0)
+      throw new Error('Initial setup requires an empty installation');
+    const user = await transaction.user.create({
+      data: { name: input.name, email: input.email, passwordHash },
+      select: { id: true },
+    });
+    return user.id;
+  }
   async seed(transaction: DatabaseTransaction, email: string, passwordHash: string) {
     const user = await transaction.user.upsert({
       where: { email },

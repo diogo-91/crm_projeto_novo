@@ -1,6 +1,6 @@
 import { Global, Inject, Injectable, Module } from '@nestjs/common';
 import type { OnApplicationShutdown } from '@nestjs/common';
-import type { RuntimeConfig, SeedConfig } from '@crm/config/server';
+import type { RuntimeConfig, SeedConfig, InitialSetupConfig } from '@crm/config/server';
 import { RUNTIME_CONFIG } from './config.module.js';
 import { StructuredLogger } from './structured-logger.js';
 @Injectable()
@@ -16,7 +16,7 @@ class ShutdownReporter implements OnApplicationShutdown {
     {
       provide: StructuredLogger,
       inject: [RUNTIME_CONFIG],
-      useFactory: (config: RuntimeConfig | SeedConfig) =>
+      useFactory: (config: RuntimeConfig | SeedConfig | InitialSetupConfig) =>
         new StructuredLogger(config.role, config.LOG_LEVEL),
     },
     ShutdownReporter,

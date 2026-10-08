@@ -55,6 +55,37 @@ export class OrganizationsAccessGateway {
     });
     return member ? this.context(member.userId, membershipId, transaction) : null;
   }
+  async lockEmptyInstallation(transaction: DatabaseTransaction) {
+    await transaction.$executeRaw`SELECT pg_advisory_xact_lock(187046132, 1)`;
+    if ((await transaction.organization.count()) !== 0)
+      throw new Error('Initial setup requires an empty installation');
+  }
+  async createInitialOrganization(
+    transaction: DatabaseTransaction,
+    userId: string,
+    input: { organizationName: string; branchName: string; branchCode: string },
+  ) {
+    const organization = await transaction.organization.create({
+      data: { name: input.organizationName },
+      select: { id: true },
+    });
+    const branch = await transaction.branch.create({
+      data: { organizationId: organization.id, name: input.branchName, code: input.branchCode },
+      select: { id: true },
+    });
+    const membership = await transaction.organizationMembership.create({
+      data: { organizationId: organization.id, userId },
+      select: { id: true },
+    });
+    await transaction.membershipBranch.create({
+      data: { organizationId: organization.id, membershipId: membership.id, branchId: branch.id },
+    });
+    await transaction.organizationMembership.update({
+      where: { id: membership.id },
+      data: { primaryBranchId: branch.id },
+    });
+    return { organizationId: organization.id, membershipId: membership.id };
+  }
   async seed(transaction: DatabaseTransaction, userId: string) {
     const organizationId = '9b150a17-f00e-4f2c-8730-513ff1fc9801';
     await transaction.infrastructureMetadata.upsert({
