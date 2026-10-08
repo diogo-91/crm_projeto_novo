@@ -14,6 +14,9 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createDatabaseClient } from '@crm/database';
 import type { DatabaseClient } from '@crm/database';
 import {
+  quoteResponseSchema,
+  quoteListResponseSchema,
+  quoteHistoryResponseSchema,
   productResponseSchema,
   productListResponseSchema,
   priceListResponseSchema,
@@ -737,6 +740,7 @@ it('database migration history on an empty PostgreSQL contains all nine successf
     '20261007150000_create_leads_pipelines_opportunities',
     '20261007200000_create_tasks_activities_reminders',
     '20261008140000_create_products_price_lists',
+    '20261008180000_create_quotes',
   ]);
   expect(migrations.every((row) => row.finished_at !== null && row.rolled_back_at === null)).toBe(
     true,
@@ -3618,6 +3622,466 @@ async function priceListFixture(
   expect(result.status).toBe(201);
   return priceListResponseSchema.parse(await result.json());
 }
+
+async function quoteFixture() {
+  const f = await commercialFixture();
+  await assign(f.org.id, f.owner.id, 'ADMIN', 'ORGANIZATION');
+  const signed = await login(f.owner.user.email);
+  const token = signed.body.accessToken;
+  const contact = await contactFixture(f);
+  const product = await productFixture(f);
+  const list = await priceListFixture(f);
+  const priced = await authenticated(
+    `/price-lists/${list.id}/items/${product.id}`,
+    f.token,
+    { unitPrice: '123.123456', expectedVersion: list.version },
+    'PUT',
+  );
+  expect(priced.status).toBe(200);
+  return {
+    ...f,
+    token,
+    contact,
+    product,
+    list: priceListResponseSchema.parse(await priced.json()),
+    input: {
+      name: 'Synthetic quote',
+      branchId: f.a.id,
+      contactId: contact.id,
+      priceListId: list.id,
+      items: [{ productId: product.id, quantity: '1.234567', discountPercent: '12.34' }],
+    },
+  };
+}
+function quoteCommand(path: string, token: string, input: unknown, key = randomUUID()) {
+  return fetch(url + '/api/v1' + path, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': key,
+    },
+    body: JSON.stringify(input),
+  });
+}
+async function createdQuote(f: Awaited<ReturnType<typeof quoteFixture>>) {
+  const response = await quoteCommand('/quotes', f.token, f.input);
+  expect(response.status).toBe(201);
+  return quoteResponseSchema.parse(await response.json());
+}
+it('quotes calculate exact server totals, preserve snapshots and reject money mass assignment', async () => {
+  const f = await quoteFixture(),
+    quote = await createdQuote(f);
+  expect(quote).toMatchObject({
+    total: '133.24',
+    subtotal: '152.00',
+    discount: '18.76',
+    revision: 1,
+    status: 'DRAFT',
+    buyer: { name: f.contact.name },
+    items: [{ unitPrice: '123.123456', sku: f.product.sku }],
+  });
+  expect(quote).not.toHaveProperty('approvedByMembershipId');
+  expect((await quoteCommand('/quotes', f.token, { ...f.input, total: '0' })).status).toBe(400);
+  expect((await authenticated('/quotes', f.token, f.input)).status).toBe(400);
+  expect(
+    (
+      await quoteCommand('/quotes', f.token, {
+        ...f.input,
+        items: [{ productId: f.product.id, quantity: '1000000000000', discountPercent: '0' }],
+      })
+    ).status,
+  ).toBe(400);
+  await authenticated(
+    `/products/${f.product.id}`,
+    f.token,
+    { name: 'Changed product', expectedVersion: 1 },
+    'PATCH',
+  );
+  await authenticated(
+    `/contacts/${f.contact.id}`,
+    f.token,
+    { name: 'Changed buyer', expectedVersion: 1 },
+    'PATCH',
+  );
+  await authenticated(
+    `/price-lists/${f.list.id}/items/${f.product.id}`,
+    f.token,
+    { unitPrice: '999', expectedVersion: f.list.version },
+    'PUT',
+  );
+  const stored = quoteResponseSchema.parse(
+    await (await authenticated(`/quotes/${quote.id}`, f.token)).json(),
+  );
+  expect(stored).toEqual(quote);
+  const updated = await authenticated(
+    `/quotes/${quote.id}`,
+    f.token,
+    {
+      expectedVersion: quote.version,
+      items: [{ productId: f.product.id, quantity: '2', discountPercent: '0' }],
+    },
+    'PATCH',
+  );
+  expect(updated.status).toBe(200);
+  expect(quoteResponseSchema.parse(await updated.json())).toMatchObject({
+    total: '246.25',
+    items: [{ unitPrice: '123.123456', description: f.product.name }],
+    buyer: { name: f.contact.name },
+  });
+});
+it('quote creation idempotency survives decimal variants and concurrent retries without duplicating audit', async () => {
+  const f = await quoteFixture(),
+    key = randomUUID();
+  const responses = await Promise.all([
+    quoteCommand('/quotes', f.token, f.input, key),
+    quoteCommand(
+      '/quotes',
+      f.token,
+      {
+        ...f.input,
+        items: [{ productId: f.product.id, quantity: '01.234567', discountPercent: '012.34' }],
+      },
+      key,
+    ),
+  ]);
+  expect(responses.map((r) => r.status)).toEqual([201, 201]);
+  const a = quoteResponseSchema.parse(await responses[0]?.json()),
+    b = quoteResponseSchema.parse(await responses[1]?.json());
+  expect(a).toEqual(b);
+  expect(await db().quote.count({ where: { organizationId: f.org.id } })).toBe(1);
+  expect(await db().quoteHistory.count({ where: { quoteId: a.id } })).toBe(1);
+  expect(
+    (await quoteCommand('/quotes', f.token, { ...f.input, name: 'Another intent' }, key)).status,
+  ).toBe(409);
+});
+it('approved quotes and items are immutable at HTTP and PostgreSQL; revisions preserve the original', async () => {
+  const f = await quoteFixture(),
+    quote = await createdQuote(f);
+  const approval = await authenticated(`/quotes/${quote.id}/approvals`, f.token, {
+    expectedVersion: quote.version,
+  });
+  expect(approval.status).toBe(200);
+  const approved = quoteResponseSchema.parse(await approval.json());
+  expect(approved).toMatchObject({ status: 'APPROVED', version: 2, canUpdate: false });
+  expect(
+    (
+      await authenticated(
+        `/quotes/${quote.id}`,
+        f.token,
+        { expectedVersion: 2, items: f.input.items },
+        'PATCH',
+      )
+    ).status,
+  ).toBe(409);
+  await expect(
+    db().quote.update({ where: { id: quote.id }, data: { notes: 'Forbidden' } }),
+  ).rejects.toThrow();
+  await expect(
+    db().quoteItem.updateMany({ where: { quoteId: quote.id }, data: { description: 'Forbidden' } }),
+  ).rejects.toThrow();
+  await expect(db().quoteItem.deleteMany({ where: { quoteId: quote.id } })).rejects.toThrow();
+  await authenticated(`/products/${f.product.id}`, f.token, { expectedVersion: 1 }, 'DELETE');
+  await authenticated(
+    `/price-lists/${f.list.id}`,
+    f.token,
+    { expectedVersion: f.list.version },
+    'DELETE',
+  );
+  const key = randomUUID(),
+    revisionResponse = await quoteCommand(
+      `/quotes/${quote.id}/revisions`,
+      f.token,
+      { expectedVersion: 2 },
+      key,
+    );
+  expect(revisionResponse.status).toBe(201);
+  const revision = quoteResponseSchema.parse(await revisionResponse.json());
+  expect(revision).toMatchObject({
+    rootQuoteId: quote.id,
+    previousQuoteId: quote.id,
+    revision: 2,
+    status: 'DRAFT',
+    total: quote.total,
+    buyer: quote.buyer,
+    items: quote.items,
+  });
+  expect(
+    quoteResponseSchema.parse(
+      await (
+        await quoteCommand(`/quotes/${quote.id}/revisions`, f.token, { expectedVersion: 2 }, key)
+      ).json(),
+    ),
+  ).toEqual(revision);
+  expect(
+    (await quoteCommand(`/quotes/${quote.id}/revisions`, f.token, { expectedVersion: 2 })).status,
+  ).toBe(409);
+  expect(
+    quoteResponseSchema.parse(await (await authenticated(`/quotes/${quote.id}`, f.token)).json()),
+  ).toEqual(approved);
+  const history = quoteHistoryResponseSchema.parse(
+    await (await authenticated(`/quotes/${quote.id}/history`, f.token)).json(),
+  );
+  expect(history.data.map((item) => item.kind)).toEqual(['CREATED', 'APPROVED']);
+  await expect(
+    db().quoteHistory.update({
+      where: {
+        organizationId_quoteId_recordVersion: {
+          organizationId: f.org.id,
+          quoteId: quote.id,
+          recordVersion: 1,
+        },
+      },
+      data: { kind: 'UPDATED' },
+    }),
+  ).rejects.toThrow();
+});
+it('quote approvals honor granular scope, do not lend a broad scope from another action and revoke replay', async () => {
+  const f = await quoteFixture();
+  await assign(f.org.id, f.other.id, 'SELLER', 'OWN');
+  const seller = (await login(f.other.user.email)).body.accessToken;
+  const sellerBuyer = await contactFixture(f, { ownerMembershipId: f.other.id });
+  const sellerInput = { ...f.input, contactId: sellerBuyer.id };
+  const key = randomUUID(),
+    response = await quoteCommand('/quotes', seller, sellerInput, key);
+  expect(response.status).toBe(201);
+  const quote = quoteResponseSchema.parse(await response.json());
+  expect(quote.canApprove).toBe(false);
+  expect(
+    (await authenticated(`/quotes/${quote.id}/approvals`, seller, { expectedVersion: 1 })).status,
+  ).toBe(403);
+  const ownQuote = await createdQuote(f);
+  expect((await authenticated(`/quotes/${ownQuote.id}`, seller)).status).toBe(404);
+  const page = quoteListResponseSchema.parse(await (await authenticated('/quotes', seller)).json());
+  expect(page.data.map((item) => item.id)).toEqual([quote.id]);
+  const role = await db().role.create({
+    data: {
+      organizationId: f.org.id,
+      code: 'QUOTE_SCOPE_TEST',
+      name: 'Quote reader',
+      description: 'Test',
+      permissions: {
+        create: {
+          permissionId: (
+            await db().permission.findUniqueOrThrow({ where: { code: 'quotes.read' } })
+          ).id,
+        },
+      },
+    },
+  });
+  await request(`/organizations/${f.org.id}/memberships/${f.other.id}/roles`, {
+    roleId: role.id,
+    scope: 'ORGANIZATION',
+    branchIds: [],
+  });
+  const approver = await db().role.create({
+    data: {
+      organizationId: f.org.id,
+      code: 'QUOTE_OWN_APPROVER',
+      name: 'Own approver',
+      description: 'Test',
+      permissions: {
+        create: {
+          permissionId: (
+            await db().permission.findUniqueOrThrow({ where: { code: 'quotes.approve' } })
+          ).id,
+        },
+      },
+    },
+  });
+  expect(
+    (
+      await request(`/organizations/${f.org.id}/memberships/${f.other.id}/roles`, {
+        roleId: approver.id,
+        scope: 'OWN',
+        branchIds: [],
+      })
+    ).status,
+  ).toBe(201);
+  expect(
+    (await authenticated(`/quotes/${ownQuote.id}/approvals`, seller, { expectedVersion: 1 }))
+      .status,
+  ).toBe(404);
+  expect(
+    (await authenticated(`/quotes/${quote.id}/approvals`, seller, { expectedVersion: 1 })).status,
+  ).toBe(200);
+
+  const sellerRole = await tenantRole(f.org.id, 'SELLER');
+  await db().userRole.deleteMany({
+    where: { organizationId: f.org.id, membershipId: f.other.id, roleId: sellerRole.id },
+  });
+  expect((await quoteCommand('/quotes', seller, sellerInput, key)).status).toBe(403);
+});
+it('quote tenant FKs reject cross-organization buyer/product/list/owner and API hides another tenant', async () => {
+  const a = await quoteFixture(),
+    b = await quoteFixture(),
+    quote = await createdQuote(a);
+  expect((await authenticated(`/quotes/${quote.id}`, b.token)).status).toBe(404);
+  expect((await authenticated(`/quotes/${quote.id}/history`, b.token)).status).toBe(404);
+  for (const override of [
+    { contactId: b.contact.id },
+    { priceListId: b.list.id },
+    { branchId: b.a.id },
+    { items: [{ productId: b.product.id, quantity: '1' }] },
+  ])
+    expect((await quoteCommand('/quotes', a.token, { ...a.input, ...override })).status).toBe(404);
+  await expect(
+    db().quoteItem.create({
+      data: {
+        organizationId: b.org.id,
+        quoteId: quote.id,
+        productId: b.product.id,
+        position: 0,
+        description: 'Cross tenant',
+        sku: 'CROSS',
+        unit: 'UN',
+        quantity: '1',
+        unitPrice: '1',
+        discountPercent: '0',
+        subtotal: '1',
+        discount: '0',
+        total: '1',
+      },
+    }),
+  ).rejects.toThrow();
+  await expect(
+    db().quoteRequest.create({
+      data: {
+        organizationId: b.org.id,
+        actorMembershipId: a.owner.id,
+        quoteId: quote.id,
+        operation: 'create',
+        keyHash: 'a'.repeat(64),
+        requestHash: 'b'.repeat(64),
+        response: {},
+      },
+    }),
+  ).rejects.toThrow();
+  await expect(
+    db().quoteHistory.create({
+      data: {
+        organizationId: b.org.id,
+        quoteId: quote.id,
+        actorMembershipId: b.owner.id,
+        kind: 'CREATED',
+        recordVersion: 2,
+      },
+    }),
+  ).rejects.toThrow();
+});
+it('quote optimistic concurrency allows only one update or approval from different actors', async () => {
+  const f = await quoteFixture(),
+    quote = await createdQuote(f);
+  await assign(f.org.id, f.other.id, 'ADMIN', 'ORGANIZATION');
+  const peer = (await login(f.other.user.email)).body.accessToken;
+  const race = await Promise.all([
+    authenticated(
+      `/quotes/${quote.id}`,
+      f.token,
+      { expectedVersion: 1, items: f.input.items, notes: 'Concurrent edit' },
+      'PATCH',
+    ),
+    authenticated(`/quotes/${quote.id}/approvals`, peer, { expectedVersion: 1 }),
+  ]);
+  expect(race.map((r) => r.status).sort()).toEqual([200, 409]);
+  expect(await db().quoteHistory.count({ where: { quoteId: quote.id } })).toBe(2);
+  let approved = quoteResponseSchema.parse(
+    await (await authenticated(`/quotes/${quote.id}`, f.token)).json(),
+  );
+  if (approved.status === 'DRAFT')
+    approved = quoteResponseSchema.parse(
+      await (
+        await authenticated(`/quotes/${quote.id}/approvals`, f.token, {
+          expectedVersion: approved.version,
+        })
+      ).json(),
+    );
+  const revisions = await Promise.all([
+    quoteCommand(`/quotes/${quote.id}/revisions`, f.token, { expectedVersion: approved.version }),
+    quoteCommand(`/quotes/${quote.id}/revisions`, peer, { expectedVersion: approved.version }),
+  ]);
+  expect(revisions.map((r) => r.status).sort()).toEqual([201, 409]);
+  expect(
+    await db().quote.count({ where: { organizationId: f.org.id, previousQuoteId: quote.id } }),
+  ).toBe(1);
+});
+it('quote validates branch price list, buyer and opportunity links without mutating the opportunity', async () => {
+  const f = await quoteFixture();
+  const branchList = await priceListFixture(f, f.b.id);
+  expect(
+    (await quoteCommand('/quotes', f.token, { ...f.input, priceListId: branchList.id })).status,
+  ).toBe(404);
+  const pipelineResponse = await authenticated('/pipelines', f.token, {
+    name: 'Quote pipeline ' + randomUUID(),
+    stages: [{ name: 'Open', kind: 'OPEN' }],
+  });
+  const pipeline = pipelineResponseSchema.parse(await pipelineResponse.json());
+  const open = pipeline.stages.find((stage) => stage.kind === 'OPEN');
+  if (!open) throw new Error('Open stage missing');
+  const opportunityResponse = await authenticated('/opportunities', f.token, {
+    name: 'Quote opportunity',
+    branchId: f.a.id,
+    ownerMembershipId: f.owner.id,
+    pipelineId: pipeline.id,
+    stageId: open.id,
+    contactId: f.contact.id,
+    currency: 'BRL',
+    amount: '100',
+  });
+  expect(opportunityResponse.status).toBe(201);
+  const opportunity = opportunityResponseSchema.parse(await opportunityResponse.json());
+  const quote = await quoteCommand('/quotes', f.token, {
+    ...f.input,
+    opportunityId: opportunity.id,
+  });
+  expect(quote.status).toBe(201);
+  expect(quoteResponseSchema.parse(await quote.json()).opportunityId).toBe(opportunity.id);
+  expect(
+    opportunityResponseSchema.parse(
+      await (await authenticated(`/opportunities/${opportunity.id}`, f.token)).json(),
+    ),
+  ).toEqual(opportunity);
+  const alternate = await contactFixture(f);
+  expect(
+    (
+      await quoteCommand('/quotes', f.token, {
+        ...f.input,
+        contactId: alternate.id,
+        opportunityId: opportunity.id,
+      })
+    ).status,
+  ).toBe(400);
+});
+it('quote rejects expired approval, supports company buyer and paginates filtered scopes', async () => {
+  const f = await quoteFixture(),
+    company = await companyFixture(f);
+  const response = await quoteCommand('/quotes', f.token, {
+    ...f.input,
+    contactId: null,
+    companyId: company.id,
+    validUntil: '2020-01-01',
+  });
+  expect(response.status).toBe(201);
+  const quote = quoteResponseSchema.parse(await response.json());
+  expect(quote.buyer.name).toBe(company.name);
+  expect(
+    (await authenticated(`/quotes/${quote.id}/approvals`, f.token, { expectedVersion: 1 })).status,
+  ).toBe(400);
+  await createdQuote(f);
+  const page = quoteListResponseSchema.parse(
+    await (await authenticated('/quotes?limit=1', f.token)).json(),
+  );
+  expect(page.pageInfo.hasNextPage).toBe(true);
+  const next = quoteListResponseSchema.parse(
+    await (
+      await authenticated(
+        '/quotes?limit=1&cursor=' + encodeURIComponent(page.pageInfo.nextCursor ?? ''),
+        f.token,
+      )
+    ).json(),
+  );
+  expect(next.data[0]?.id).not.toBe(page.data[0]?.id);
+});
 it('catalog creates explicit DTOs, normalized SKU and exact six-place prices', async () => {
   const f = await commercialFixture();
   const product = await productFixture(f, { sku: ' normalized ' });
@@ -4222,4 +4686,97 @@ it('price items paginate over exactly one tenant/list and preserve database deci
     cursor = page.pageInfo.nextCursor;
   } while (cursor);
   expect(seen.sort()).toEqual(ids.sort());
+});
+
+it.each(['BRANCH', 'BRANCH_SET', 'ORGANIZATION'] as const)(
+  'quote %s scopes filter before pagination and authorize approval per branch',
+  async (scope) => {
+    const f = await quoteFixture();
+    const a = await createdQuote(f);
+    const bResponse = await quoteCommand('/quotes', f.token, {
+      ...f.input,
+      branchId: f.b.id,
+      name: 'Branch B quote',
+    });
+    expect(bResponse.status).toBe(201);
+    const b = quoteResponseSchema.parse(await bResponse.json());
+    await assign(
+      f.org.id,
+      f.other.id,
+      'SALES_MANAGER',
+      scope,
+      scope === 'BRANCH' ? [f.b.id] : scope === 'BRANCH_SET' ? [f.b.id, f.c.id] : [],
+    );
+    const token = (await login(f.other.user.email)).body.accessToken;
+    const list = quoteListResponseSchema.parse(
+      await (await authenticated('/quotes?limit=1', token)).json(),
+    );
+    expect(list.data[0]?.id).toBe(b.id);
+    expect(list.pageInfo.hasNextPage).toBe(scope === 'ORGANIZATION');
+    expect((await authenticated(`/quotes/${a.id}`, token)).status).toBe(
+      scope === 'ORGANIZATION' ? 200 : 404,
+    );
+    expect(
+      (await authenticated(`/quotes/${a.id}/approvals`, token, { expectedVersion: 1 })).status,
+    ).toBe(scope === 'ORGANIZATION' ? 200 : 404);
+    expect(
+      (await authenticated(`/quotes/${b.id}/approvals`, token, { expectedVersion: 1 })).status,
+    ).toBe(200);
+  },
+);
+
+it('quote PostgreSQL aggregate accepts a real atomic document and reports constraint failures', async () => {
+  const f = await quoteFixture(),
+    id = randomUUID();
+  await db().$transaction(async (tx) => {
+    await tx.quote.create({
+      data: {
+        id,
+        organizationId: f.org.id,
+        rootQuoteId: id,
+        name: 'Database aggregate test',
+        branchId: f.a.id,
+        ownerMembershipId: f.owner.id,
+        contactId: f.contact.id,
+        priceListId: f.list.id,
+        priceListName: f.list.name,
+        currency: 'BRL',
+        buyerSnapshot: { name: 'Synthetic buyer', document: null, email: null, phone: null },
+        subtotal: '123.12',
+        discount: '0',
+        total: '123.12',
+        createdByMembershipId: f.owner.id,
+        items: {
+          create: {
+            productId: f.product.id,
+            position: 0,
+            sku: f.product.sku,
+            description: f.product.name,
+            unit: 'UN',
+            quantity: '1',
+            unitPrice: '123.123456',
+            discountPercent: '0',
+            subtotal: '123.12',
+            discount: '0',
+            total: '123.12',
+          },
+        },
+      },
+    });
+    await tx.quoteHistory.create({
+      data: {
+        organizationId: f.org.id,
+        quoteId: id,
+        actorMembershipId: f.owner.id,
+        kind: 'CREATED',
+        recordVersion: 1,
+      },
+    });
+  });
+  await expect(
+    db().quoteItem.updateMany({
+      where: { quoteId: id },
+      data: { quantity: '2', subtotal: '246.25', total: '246.25' },
+    }),
+  ).rejects.toThrow();
 });

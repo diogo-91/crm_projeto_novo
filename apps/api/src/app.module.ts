@@ -1,3 +1,4 @@
+import { QuotesModule } from './modules/quotes/index.js';
 import { TasksModule } from './modules/tasks/tasks.module.js';
 import { ActivitiesModule } from './modules/activities/index.js';
 import { NotificationsModule } from './modules/notifications/index.js';
@@ -22,6 +23,7 @@ import { OrganizationsModule } from './modules/organizations/organizations.modul
     AuthModule,
     AccessControlModule,
     CatalogModule,
+    QuotesModule,
     ContactsModule,
     LeadsModule,
     TasksModule,

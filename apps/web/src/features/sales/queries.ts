@@ -91,7 +91,7 @@ export function useOpportunity(id: string) {
     ),
     queryFn: ({ signal }) =>
       session.request(`opportunities/${id}`, opportunityResponseSchema, { signal }),
-    enabled: context.permissions.includes('opportunities.read'),
+    enabled: Boolean(id) && context.permissions.includes('opportunities.read'),
   });
 }
 export function usePipelines(branchId = '') {

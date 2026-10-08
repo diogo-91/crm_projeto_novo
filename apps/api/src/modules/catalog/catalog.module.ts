@@ -1,3 +1,4 @@
+import { CatalogLookupGateway } from './infrastructure/catalog-lookup.gateway.js';
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../database/database.module.js';
 import { AccessControlModule } from '../access-control/index.js';
@@ -10,6 +11,7 @@ import { PriceListsController } from './presentation/price-lists.controller.js';
 @Module({
   imports: [DatabaseModule, AccessControlModule, OrganizationsContextModule],
   controllers: [ProductsController, PriceListsController],
-  providers: [ProductsRepository, PriceListsRepository, CatalogService],
+  exports: [CatalogLookupGateway],
+  providers: [CatalogLookupGateway, ProductsRepository, PriceListsRepository, CatalogService],
 })
 export class CatalogModule {}

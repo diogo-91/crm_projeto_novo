@@ -6,6 +6,7 @@ export const catalog = permissionCodes.map((code) => ({
   domain: code === 'organizations.create' ? ('PLATFORM' as const) : ('ORGANIZATION' as const),
 }));
 const commercialRead: PermissionCode[] = [
+  'quotes.read',
   'products.read',
   'price-lists.read',
   'contacts.read',
@@ -20,6 +21,8 @@ const commercialRead: PermissionCode[] = [
   'opportunities.read',
 ];
 const commercialWrite: PermissionCode[] = [
+  'quotes.create',
+  'quotes.update',
   'contacts.create',
   'contacts.update',
   'companies.create',
@@ -49,6 +52,7 @@ export const templates: { code: string; name: string; permissions: PermissionCod
       ...read,
       ...commercialRead,
       ...commercialWrite,
+      'quotes.approve',
       'contacts.assign',
       'companies.assign',
       'tasks.assign',
@@ -69,6 +73,7 @@ export const templates: { code: string; name: string; permissions: PermissionCod
       ...commercialRead,
       ...commercialWrite,
       'price-lists.manage',
+      'quotes.approve',
       'contacts.assign',
       'companies.assign',
       'tasks.assign',

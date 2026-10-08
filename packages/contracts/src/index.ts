@@ -37,3 +37,5 @@ export * from './tasks.js';
 
 export * from './money.js';
 export * from './catalog.js';
+
+export * from './quotes.js';

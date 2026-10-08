@@ -1,4 +1,6 @@
 import { ProductList } from '@/features/catalog/product-list';
+import { QuoteList } from '@/features/quotes/quote-list';
+import { QuoteDetail } from '@/features/quotes/quote-detail';
 import { ProductForm } from '@/features/catalog/product-form';
 import { PriceListCreateForm } from '@/features/catalog/price-list-form';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -111,6 +113,174 @@ afterEach(() => {
   navigation.params = '';
   navigation.push.mockReset();
   navigation.replace.mockReset();
+});
+
+const quote = {
+  ...dates,
+  id,
+  rootQuoteId: id,
+  previousQuoteId: null,
+  revision: 1,
+  name: 'Test proposal',
+  branchId,
+  ownerMembershipId: id,
+  opportunityId: null,
+  currency: 'BRL',
+  status: 'DRAFT',
+  subtotal: '20.00',
+  discount: '2.00',
+  total: '18.00',
+  version: 1,
+  contactId: id,
+  companyId: null,
+  buyer: { name: 'Preserved buyer', document: null, email: null, phone: null },
+  priceListId: id,
+  priceListName: 'Snapshot list',
+  validUntil: null,
+  notes: null,
+  approvedAt: null,
+  items: [
+    {
+      productId: id,
+      sku: 'ITEM',
+      description: 'Preserved description',
+      unit: 'UN',
+      quantity: '2.000000',
+      unitPrice: '10.000000',
+      discountPercent: '10.00',
+      subtotal: '20.00',
+      discount: '2.00',
+      total: '18.00',
+    },
+  ],
+  canUpdate: false,
+  canApprove: false,
+  canRevise: false,
+};
+it('quote list respects read-only UI actions and shows exact server totals', async () => {
+  setup(
+    (path) =>
+      path.startsWith('quotes?')
+        ? json({
+            data: [
+              {
+                ...Object.fromEntries(
+                  Object.entries(quote).filter(
+                    ([key]) =>
+                      ![
+                        'contactId',
+                        'companyId',
+                        'buyer',
+                        'priceListId',
+                        'priceListName',
+                        'validUntil',
+                        'notes',
+                        'approvedAt',
+                        'items',
+                        'canUpdate',
+                        'canApprove',
+                        'canRevise',
+                      ].includes(key),
+                  ),
+                ),
+              },
+            ],
+            pageInfo: { hasNextPage: false, nextCursor: null },
+          })
+        : json({ data: [], pageInfo: { hasNextPage: false, nextCursor: null } }),
+    ['quotes.read'],
+  );
+  render(
+    <Harness>
+      <QuoteList />
+    </Harness>,
+  );
+  expect(await screen.findByRole('link', { name: 'Test proposal' })).toBeTruthy();
+  expect(screen.getByText(/BRL 18.00/)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Novo orçamento' })).toBeNull();
+});
+it('quote page denies unauthorized access without contacting quote resources', async () => {
+  const transport = setup(undefined, []);
+  render(
+    <Harness>
+      <QuoteList />
+    </Harness>,
+  );
+  await screen.findByText('Acesso negado');
+  expect(
+    transport.mock.calls.filter(([input]) =>
+      (typeof input === 'string' ? input : input instanceof URL ? input.href : input.url).includes(
+        '/quotes',
+      ),
+    ),
+  ).toHaveLength(0);
+});
+it('quote detail presents preserved snapshots without forbidden approval controls', async () => {
+  setup(
+    (path) =>
+      path.includes('/history')
+        ? json({ data: [], pageInfo: { hasNextPage: false, nextCursor: null } })
+        : json(quote),
+    ['quotes.read'],
+  );
+  render(
+    <Harness>
+      <QuoteDetail id={id} />
+    </Harness>,
+  );
+  expect(await screen.findByText('Preserved buyer')).toBeTruthy();
+  expect(screen.getByText('ITEM · Preserved description')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Aprovar orçamento' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Editar orçamento' })).toBeNull();
+});
+it('quote revision retries retain the same idempotency key and expose infrastructure failure', async () => {
+  const attempts: RequestInit[] = [];
+  setup(
+    (path, init) => {
+      if (path.includes('/revisions')) {
+        attempts.push(init ?? {});
+        return attempts.length === 1
+          ? json(
+              {
+                type: 'about:blank',
+                title: 'Unavailable',
+                status: 503,
+                detail: 'Dependency unavailable',
+                instance: '/quotes',
+                code: 'DEPENDENCY_UNAVAILABLE',
+                requestId: id,
+              },
+              503,
+            )
+          : json({ ...quote, id: branchId, rootQuoteId: id, previousQuoteId: id, revision: 2 });
+      }
+      return path.includes('/history')
+        ? json({ data: [], pageInfo: { hasNextPage: false, nextCursor: null } })
+        : json({
+            ...quote,
+            status: 'APPROVED',
+            version: 2,
+            approvedAt: dates.createdAt,
+            canRevise: true,
+          });
+    },
+    ['quotes.read', 'quotes.create'],
+  );
+  render(
+    <Harness>
+      <QuoteDetail id={id} />
+    </Harness>,
+  );
+  await userEvent.click(await screen.findByRole('button', { name: 'Criar revisão' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Confirmar revisão' }));
+  await screen.findByText('O serviço está indisponível no momento. Tente novamente em instantes.');
+  await userEvent.click(screen.getByRole('button', { name: 'Confirmar revisão' }));
+  await waitFor(() => expect(navigation.push).toHaveBeenCalledWith(`/quotes/${branchId}`));
+  expect(attempts).toHaveLength(2);
+  expect(new Headers(attempts[0]?.headers).get('Idempotency-Key')).toBe(
+    new Headers(attempts[1]?.headers).get('Idempotency-Key'),
+  );
+  expect(new Headers(attempts[0]?.headers).get('Idempotency-Key')).toMatch(/^[a-f0-9-]{36}$/);
 });
 it('shows the empty state and a permitted create action', async () => {
   setup();

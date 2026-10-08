@@ -2,7 +2,7 @@
 
 ## 1. Estado e decisões
 
-O ERD abaixo é um modelo **conceitual futuro**, não uma ordem para gerar schema/migrations comerciais. A fase 1 criou InfrastructureMetadata. A fase 2 materializa exclusivamente Organization, Branch, User global, OrganizationMembership e MembershipBranch; consulte a seção de modelo físico atual, README e ADR-011. A fase 3 acrescenta credenciais, sessões e RBAC conforme a seção física ao final e ADR-012. A fase 5 acrescenta Contact, Company, Tag, ContactTag e históricos mínimos de atribuição, conforme ADR-014 e a seção física abaixo. A fase 6 acrescenta leads, pipelines/etapas, oportunidades e históricos mínimos, conforme ADR-015 e a seção física ao final. As fases 7 e 9 acrescentam tarefas/timeline/lembretes e catálogo/preços, descritos nas respectivas seções físicas. A fase 8 está adiada. O restante do ERD continua futuro. Campos e cardinalidades serão refinados por módulo; os limites de tenant e invariantes já são decisões obrigatórias. PostgreSQL com Prisma, schema compartilhado e `organization_id` em entidades tenant. Identidade `User` é global; empresa cliente `Company` é diferente de `Organization`.
+O ERD abaixo é um modelo **conceitual futuro**, não uma ordem para gerar schema/migrations comerciais. A fase 1 criou InfrastructureMetadata. A fase 2 materializa exclusivamente Organization, Branch, User global, OrganizationMembership e MembershipBranch; consulte a seção de modelo físico atual, README e ADR-011. A fase 3 acrescenta credenciais, sessões e RBAC conforme a seção física ao final e ADR-012. A fase 5 acrescenta Contact, Company, Tag, ContactTag e históricos mínimos de atribuição, conforme ADR-014 e a seção física abaixo. A fase 6 acrescenta leads, pipelines/etapas, oportunidades e históricos mínimos, conforme ADR-015 e a seção física ao final. As fases 7 e 9 acrescentam tarefas/timeline/lembretes e catálogo/preços, descritos nas respectivas seções físicas. A fase 8 está adiada. A fase 10 materializa orçamentos conforme ADR-018 e a seção física ao final. O restante do ERD continua futuro. Campos e cardinalidades serão refinados por módulo; os limites de tenant e invariantes já são decisões obrigatórias. PostgreSQL com Prisma, schema compartilhado e `organization_id` em entidades tenant. Identidade `User` é global; empresa cliente `Company` é diferente de `Organization`.
 
 UUID gerado pela aplicação/Prisma ou default PostgreSQL compatível com a versão escolhida. Começar com UUID v4; avaliar v7 apenas com suporte real e medição, sem substituir UUID por sequências públicas. Datas `timestamptz` em UTC; frontend converte para fuso da organização/usuário. Horários de automações/metas precisam armazenar também o fuso IANA usado na definição do período para lidar com mudanças de horário.
 
@@ -876,3 +876,37 @@ SKU é normalizado na fronteira; CHECK impede chave não normalizada em SQL dire
 Mutações de preço travam lista, verificam expectedVersion e produto ativo sob lock; incrementam versão/autor da lista na mesma transação. Produto arquivado preserva preços anteriores, porém não recebe novos preços. Item arquivado pode ser reativado explicitamente com preço informado e versão vigente. Não há histórico temporal do preço nesta fase; snapshots de documentos pertencem à fase 10 e deverão preservar o valor então contratado.
 
 Seed atualiza idempotentemente apenas demo e provisionamento de novas organizações para 48 permissões (quatro novas: products.read/manage, price-lists.read/manage). Não cria produtos/listas/preços fictícios nem amplia todos os grants de tenants existentes. UI usa projeções explícitas, sem campos internos de autores/tenant. A integração testa banco limpo, seed repetido, FK cruzada, uniques/corridas, decimal exato, escopos e preservação de referências.
+
+## Modelo físico de orçamentos — fase 10
+
+Migration `20261008180000_create_quotes`, após as nove migrations imutáveis anteriores. Quote, QuoteItem, QuoteHistory e QuoteRequest são as únicas tabelas novas. Não há migração de valores existentes nem concessão automática a tenants. Seed não cria propostas comerciais.
+
+```mermaid
+erDiagram
+  Organization ||--o{ Quote : isola
+  MembershipBranch ||--o{ Quote : atribui_filial_e_owner
+  OrganizationMembership ||--o{ QuoteHistory : audita
+  OrganizationMembership ||--o{ QuoteRequest : deduplica
+  Contact o|--o{ Quote : comprador
+  Company o|--o{ Quote : comprador
+  Opportunity o|--o{ Quote : vincula
+  PriceList ||--o{ Quote : origina_preco
+  Quote ||--|{ QuoteItem : preserva
+  Product ||--o{ QuoteItem : referencia
+  Quote ||--|{ Quote : raiz_da_serie
+  Quote o|--o| Quote : revisao_anterior
+  Quote ||--|{ QuoteHistory : trilha
+  Quote ||--o{ QuoteRequest : resultado
+```
+
+Todas as relações financeiras usam organizationId nas FKs. Quote owner/filial usa `(tenant,owner,branch) → MembershipBranch(tenant,membership,branch)`, não User global. Contact/Company/Opportunity/PriceList/root/previous/autores têm FKs tenant compostas; QuoteItem usa Quote e Product do mesmo tenant; histórico/dedupe usam Quote e membership do mesmo tenant. Delete/update RESTRICT preserva dados e atribuição. Unique tenant+root+revision e tenant+previous impedem colisão/ramificação. Trigger valida raiz/revisão anterior aprovada e mesma carteira/filial. Buyer exige exatamente Contact ou Company via CHECK; moeda permitida, timestamps de aprovação e estados são coerentes.
+
+QuoteItem guarda position, SKU/descrição/unidade, quantidade numeric(18,6), preço numeric(18,6), desconto percentual numeric(5,2) e valores numeric(19,4). Valores monetários do documento são centavos; CHECKs usam ROUND HALF_UP PostgreSQL para validar o mesmo cálculo BigInt do domínio. Quantidade positiva, preços não negativos e desconto 0–100. Unique tenant+quote+produto e tenant+quote+posição; máximo 100 itens/posição. Constraint triggers deferred verificam contagem e soma do agregado mesmo em alterações diretas de itens e reparenting. Histórico da versão corrente é obrigatório no commit.
+
+Trigger protege inteiro Quote APPROVED e itens contra UPDATE/DELETE/INSERT; Quote não aceita DELETE em nenhum estado. Identidade/série/owner/filial/comprador/lista/moeda e comprador snapshot não mudam por update de rascunho; versão avança uma unidade por alteração. Ledger histórico e dedupe são append-only. Rascunho editado substitui itens na mesma transação e verifica totais/audit apenas no commit. Row locks tornam aprovação e alteração de itens mutuamente exclusivas. Não editar SQL já aplicado; futuros ajustes serão novas migrations.
+
+Snapshots JSON do comprador têm schema estrito e campos mínimos já disponíveis: nome, documento, e-mail, telefone. Dados não são derivados do cadastro nas leituras. Itens e nome da tabela são snapshots próprios. Catálogo arquivado não destrói documento nem impede revisão baseada em snapshots. Novos produtos adicionados a rascunho exigem lista/preço/produto ativos e autorizados; oportunidade selecionada precisa corresponder a filial, comprador e moeda, sem mudar seu valor.
+
+QuoteHistory guarda ator, CREATED/UPDATED/APPROVED/REVISED, versão e UTC; unique tenant+quote+versão atende paginação cronológica por versão. QuoteRequest guarda operação, SHA-256 da chave/intenção, resultado Quote e response pública JSON na mesma transação. Unique tenant+ator+operação+keyHash decide retries concorrentes; sem purge automático que ressuscite comandos. Snapshots/dedupe exigem retenção financeira/LGPD aprovada antes de limpeza; logs não copiam PII.
+
+Índices tenant+createdAt+id, tenant+owner+createdAt+id, tenant+branch+createdAt+id e tenant+opportunity+createdAt+id atendem consulta/carteira/vínculo. Detalhe máximo 100 itens; listas limite 25/100 e cursor opaco com desempate UUID; histórico paginado por versão. Busca substring é limitada pelo tenant/scope, sem índice textual especulativo. Nenhuma tabela, fila ou índice ERP/PDF/outbox foi criado.

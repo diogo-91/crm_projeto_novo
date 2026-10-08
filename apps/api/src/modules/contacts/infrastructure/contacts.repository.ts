@@ -167,6 +167,14 @@ export class ContactsRepository {
     });
     return new Map(rows.map((row) => [row.id, row]));
   }
+  async buyerSnapshot(tx: DatabaseTransaction, context: TenantContext, id: string) {
+    const row = await tx.contact.findFirst({
+      where: { AND: [commercialScope(context, 'contacts.read'), { id, active: true }] },
+      select: { name: true, document: true, email: true, phone: true },
+    });
+    if (!row) throw new ApplicationError('RESOURCE_NOT_FOUND', 'Buyer unavailable.');
+    return row;
+  }
   async requireLink(
     tx: DatabaseTransaction,
     context: TenantContext,

@@ -21,6 +21,7 @@ export function OpportunityDetail({ id }: { id: string }) {
   const history = useStageHistory(id);
   const [moving, setMoving] = useState(false);
   const canMove = usePermission('opportunities.move');
+  const canReadQuotes = usePermission('quotes.read');
   const canDelete = usePermission('opportunities.delete');
   if (!canRead)
     return (
@@ -64,6 +65,13 @@ export function OpportunityDetail({ id }: { id: string }) {
           </div>
         }
       />
+      {canReadQuotes && (
+        <p className="mb-5">
+          <Link className="text-body underline" href={`/quotes?opportunityId=${id}`}>
+            Orçamentos desta oportunidade
+          </Link>
+        </p>
+      )}
       <RecordSummary
         notes={row.notes}
         items={[

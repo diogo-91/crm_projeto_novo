@@ -96,6 +96,7 @@ export function usePrices(id: string, filters: Filters) {
         { signal },
       ),
     enabled:
+      Boolean(id) &&
       context.permissions.includes('price-lists.read') &&
       context.permissions.includes('products.read'),
   });

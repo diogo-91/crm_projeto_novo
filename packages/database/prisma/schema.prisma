@@ -19,6 +19,7 @@ model InfrastructureMetadata {
 }
 
 model Organization {
+  quotes     Quote[]
   products   Product[]
   priceLists PriceList[]
   tasks      Task[]
@@ -91,6 +92,10 @@ model User {
 }
 
 model OrganizationMembership {
+  quoteAuthors      Quote[]         @relation("QuoteCreator")
+  quoteApprovals    Quote[]         @relation("QuoteApprover")
+  quoteHistory      QuoteHistory[]
+  quoteRequests     QuoteRequest[]
   createdProducts   Product[]       @relation("ProductCreator")
   updatedProducts   Product[]       @relation("ProductUpdater")
   createdPriceLists PriceList[]     @relation("PriceListCreator")
@@ -146,7 +151,8 @@ model OrganizationMembership {
 }
 
 model MembershipBranch {
-  tasks Task[]
+  quotes Quote[]
+  tasks  Task[]
 
   ownedLeads         Lead[]
   ownedOpportunities Opportunity[]
@@ -309,6 +315,7 @@ model RefreshToken {
 }
 
 model Company {
+  quotes                Quote[]
   leads                 Lead[]
   opportunities         Opportunity[]
   assignmentHistory     CompanyAssignmentHistory[]
@@ -348,6 +355,7 @@ model Company {
 }
 
 model Contact {
+  quotes     Quote[]
   tasks      Task[]
   activities Activity[]
 
@@ -582,6 +590,7 @@ model Lead {
 }
 
 model Opportunity {
+  quotes     Quote[]
   tasks      Task[]
   activities Activity[]
 
@@ -866,6 +875,7 @@ model Notification {
 }
 
 model Product {
+  quoteItems            QuoteItem[]
   id                    String                 @id @default(uuid()) @db.Uuid
   organizationId        String                 @map("organization_id") @db.Uuid
   sku                   String                 @db.VarChar(64)
@@ -892,6 +902,7 @@ model Product {
 }
 
 model PriceList {
+  quotes                Quote[]
   id                    String                 @id @default(uuid()) @db.Uuid
   organizationId        String                 @map("organization_id") @db.Uuid
   branchId              String?                @map("branch_id") @db.Uuid
@@ -937,4 +948,118 @@ model PriceListItem {
   @@index([organizationId, priceListId, id])
   @@index([organizationId, productId])
   @@map("price_list_items")
+}
+
+enum QuoteStatus {
+  DRAFT
+  APPROVED
+}
+
+model Quote {
+  id                     String                  @id @default(uuid()) @db.Uuid
+  organizationId         String                  @map("organization_id") @db.Uuid
+  rootQuoteId            String                  @map("root_quote_id") @db.Uuid
+  previousQuoteId        String?                 @map("previous_quote_id") @db.Uuid
+  revision               Int                     @default(1)
+  name                   String                  @db.VarChar(160)
+  branchId               String                  @map("branch_id") @db.Uuid
+  ownerMembershipId      String                  @map("owner_membership_id") @db.Uuid
+  contactId              String?                 @map("contact_id") @db.Uuid
+  companyId              String?                 @map("company_id") @db.Uuid
+  opportunityId          String?                 @map("opportunity_id") @db.Uuid
+  priceListId            String                  @map("price_list_id") @db.Uuid
+  priceListName          String                  @map("price_list_name") @db.VarChar(160)
+  buyerSnapshot          Json                    @map("buyer_snapshot")
+  currency               String                  @db.VarChar(3)
+  status                 QuoteStatus             @default(DRAFT)
+  subtotal               Decimal                 @db.Decimal(19, 4)
+  discount               Decimal                 @db.Decimal(19, 4)
+  total                  Decimal                 @db.Decimal(19, 4)
+  validUntil             DateTime?               @map("valid_until") @db.Date
+  notes                  String?                 @db.VarChar(4000)
+  version                Int                     @default(1)
+  createdByMembershipId  String                  @map("created_by_membership_id") @db.Uuid
+  approvedByMembershipId String?                 @map("approved_by_membership_id") @db.Uuid
+  approvedAt             DateTime?               @map("approved_at") @db.Timestamptz(6)
+  createdAt              DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  assignment             MembershipBranch        @relation(fields: [organizationId, ownerMembershipId, branchId], references: [organizationId, membershipId, branchId], onDelete: Restrict, onUpdate: Restrict)
+  creator                OrganizationMembership  @relation("QuoteCreator", fields: [organizationId, createdByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  approver               OrganizationMembership? @relation("QuoteApprover", fields: [organizationId, approvedByMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  contact                Contact?                @relation(fields: [organizationId, contactId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  company                Company?                @relation(fields: [organizationId, companyId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  opportunity            Opportunity?            @relation(fields: [organizationId, opportunityId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  priceList              PriceList               @relation(fields: [organizationId, priceListId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  root                   Quote                   @relation("QuoteRoot", fields: [organizationId, rootQuoteId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  revisions              Quote[]                 @relation("QuoteRoot")
+  previous               Quote?                  @relation("QuotePrevious", fields: [organizationId, previousQuoteId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  next                   Quote[]                 @relation("QuotePrevious")
+  items                  QuoteItem[]
+  history                QuoteHistory[]
+  requests               QuoteRequest[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, rootQuoteId, revision])
+  @@unique([organizationId, previousQuoteId])
+  @@index([organizationId, createdAt, id])
+  @@index([organizationId, ownerMembershipId, createdAt, id])
+  @@index([organizationId, branchId, createdAt, id])
+  @@index([organizationId, opportunityId, createdAt, id])
+  @@map("quotes")
+}
+
+model QuoteItem {
+  id              String  @id @default(uuid()) @db.Uuid
+  organizationId  String  @map("organization_id") @db.Uuid
+  quoteId         String  @map("quote_id") @db.Uuid
+  productId       String  @map("product_id") @db.Uuid
+  position        Int
+  sku             String  @db.VarChar(64)
+  description     String  @db.VarChar(160)
+  unit            String  @db.VarChar(32)
+  quantity        Decimal @db.Decimal(18, 6)
+  unitPrice       Decimal @map("unit_price") @db.Decimal(18, 6)
+  discountPercent Decimal @map("discount_percent") @db.Decimal(5, 2)
+  subtotal        Decimal @db.Decimal(19, 4)
+  discount        Decimal @db.Decimal(19, 4)
+  total           Decimal @db.Decimal(19, 4)
+  quote           Quote   @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  product         Product @relation(fields: [organizationId, productId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, quoteId, productId])
+  @@unique([organizationId, quoteId, position])
+  @@map("quote_items")
+}
+
+model QuoteHistory {
+  id                String                 @id @default(uuid()) @db.Uuid
+  organizationId    String                 @map("organization_id") @db.Uuid
+  quoteId           String                 @map("quote_id") @db.Uuid
+  actorMembershipId String                 @map("actor_membership_id") @db.Uuid
+  kind              String                 @db.VarChar(16)
+  recordVersion     Int                    @map("record_version")
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  quote             Quote                  @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  actor             OrganizationMembership @relation(fields: [organizationId, actorMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, quoteId, recordVersion])
+  @@map("quote_history")
+}
+
+model QuoteRequest {
+  id                String                 @id @default(uuid()) @db.Uuid
+  organizationId    String                 @map("organization_id") @db.Uuid
+  actorMembershipId String                 @map("actor_membership_id") @db.Uuid
+  operation         String                 @db.VarChar(64)
+  keyHash           String                 @map("key_hash") @db.VarChar(64)
+  requestHash       String                 @map("request_hash") @db.VarChar(64)
+  quoteId           String                 @map("quote_id") @db.Uuid
+  response          Json
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  quote             Quote                  @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  actor             OrganizationMembership @relation(fields: [organizationId, actorMembershipId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, actorMembershipId, operation, keyHash], map: "quote_requests_actor_operation_key")
+  @@map("quote_requests")
 }

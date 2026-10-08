@@ -1,10 +1,11 @@
-import type { Metadata } from 'next';
-import { ModulePlaceholder } from '@/components/layout/module-placeholder';
-export const metadata: Metadata = { title: 'Orçamentos' };
+import { Suspense } from 'react';
+import { QuoteList } from '@/features/quotes/quote-list';
+import { ListSkeleton } from '@/features/commercial/query-feedback';
+export const metadata = { title: 'Orçamentos — CRM' };
 export default function Page() {
   return (
-    <>
-      <ModulePlaceholder href="/quotes" />
-    </>
+    <Suspense fallback={<ListSkeleton />}>
+      <QuoteList />
+    </Suspense>
   );
 }

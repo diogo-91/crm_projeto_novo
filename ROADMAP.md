@@ -114,14 +114,16 @@ Gate: preços/uniques/tenant e tabelas de filiais testados; alterações em list
 
 Evidência de 2026-10-08: instalação congelada, lint, typecheck, test, test:integration, build e test:e2e passaram. **434 testes: 250 unitários (79 frontend/DOM incluídos), 10 HTTP, 138 integrações PostgreSQL/Redis/API/worker e 36 E2E Chromium**. Os 383 cenários anteriores foram preservados. Nove migrations desde PostgreSQL limpo e seed repetido; atualização incremental local sem reset preservou identidades/credenciais. Unique de SKU/nome e versão foram testados em requests de atores distintos; FKs cruzadas, quatro scopes, ação sem empréstimo de scope, preço decimal exato, arquivamento/reativação e unidade/moeda/filial imutáveis pela API cobertos. Jornada real configura produto e tabela de filial, edita preço de seis casas, rejeita precisão extra, arquiva/reativa preço e troca organização. Axe/foco e três larguras do catálogo passaram, mantendo as jornadas anteriores. pnpm dev confirmou web/API/worker, health/live/ready, Swagger, catálogo autenticado, rejeição anônima e job técnico. Bundles públicos/logs verificados sem secrets. Seed deixa catálogo vazio e amplia apenas demo para 48 permissões. ADR-017 registra decisões e fase 8 adiada; nenhuma dependência, estoque, ERP, importação ou funcionalidade de orçamento adicionada.
 
-## Fase 10 — Orçamentos
+## Fase 10 — Orçamentos (concluída)
 
 1. Quote/Item, política de cálculo/arredondamento/moedas e snapshots de comprador/produto/preço.
-2. Revisões imutáveis de versões aprovadas/enviadas, aprovação granular e audit.
-3. Integração com oportunidade e fluxo UI; Idempotency-Key em criação/envio relevante.
-4. PDF/entrega assíncrona só se solicitados, com storage privado e trabalho durável.
+2. Documentos aprovados imutáveis, revisões em novos IDs, aprovação granular e histórico transacional.
+3. Integração com oportunidade e fluxo UI; Idempotency-Key obrigatório em criação/revisão.
+4. PDF/entrega assíncrona ficam fora deste incremento; quando solicitados, exigem storage privado e trabalho durável.
 
 Gate: cálculo, descontos, snapshots após edição do catálogo, aprovação, concorrência e idem cobertos. Credenciais/sincronização ERP ficam para incremento específico após caso real; ERPProvider é limite definido, não implementação autorizada.
+
+Evidência de **2026-10-08**: instalação congelada, lint, typecheck, test, test:integration, build e test:e2e PASS. **476 testes: 276 unitários (83 frontend/DOM incluídos), 10 HTTP, 150 integrações reais e 40 E2E Chromium**; os 434 cenários anteriores foram preservados. Dez migrations aplicadas desde PostgreSQL limpo e seed idempotente. Banco local recebeu somente a migration incremental `20261008180000_create_quotes`; seed duas vezes preservou identidades/credenciais e não criou catálogo/orçamentos fictícios. Cálculo BigInt/HALF_UP, descontos, snapshots, imutabilidade no banco, histórico paginado, idempotência canônica, concorrência entre atores e quatro scopes foram testados. Jornada real cria/aprova/revisa, mantém preços após alteração do catálogo e verifica isolamento ao trocar organização; axe, foco e larguras 375/768/1440 passaram. Web/API/worker, health/live/ready, Swagger, leitura autenticada e job técnico passaram; bundles públicos/logs sem secrets. ADR-018 registra política, retenção e limites. Nenhuma dependência, serviço, PDF, entrega externa, ERP ou automação adicionada. A fase 11 exige nova solicitação.
 
 ## Fase 11 — Automações
 
